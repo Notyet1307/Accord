@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>R001 对话触发与工作流状态原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f8;
+      --surface: #fff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #dce2e9;
+      --accent: #2458a6;
+      --accent-soft: #eaf1fb;
+      --good: #16794a;
+      --good-soft: #e9f7ef;
+      --warn: #9a5a00;
+      --warn-soft: #fff3dc;
+      --danger: #a62c2c;
+      --danger-soft: #fdecec;
+      --shadow: 0 8px 24px rgba(24, 39, 75, .08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.55; }
+    main { width: min(1200px, calc(100% - 32px)); margin: 32px auto 72px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: clamp(27px, 4vw, 42px); line-height: 1.18; }
+    h2 { margin-bottom: 16px; font-size: 22px; }
+    h3 { margin-bottom: 10px; font-size: 16px; }
+    .eyebrow { margin-bottom: 10px; color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .lede { max-width: 960px; color: var(--muted); }
+    .notice { margin: 20px 0 24px; padding: 14px 16px; border: 1px solid #f0c36d; border-radius: 10px; background: var(--warn-soft); color: #714200; }
+    .panel { margin-top: 20px; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+    .summary-card { min-height: 108px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfd; }
+    .label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    .value { font-weight: 750; overflow-wrap: anywhere; }
+    .subvalue { margin-top: 4px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .badge { display: inline-flex; align-items: center; min-height: 26px; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; }
+    .badge.good { background: var(--good-soft); color: var(--good); }
+    .badge.warn { background: var(--warn-soft); color: var(--warn); }
+    .badge.danger { background: var(--danger-soft); color: var(--danger); }
+    .section-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; margin-top: 16px; }
+    .state-block { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+    .empty { color: var(--muted); font-style: italic; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    th { color: var(--muted); font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    .message { margin: 8px 0; padding: 10px 12px; border-left: 3px solid var(--line); background: #fafbfc; }
+    .message.agent { border-left-color: var(--accent); background: var(--accent-soft); }
+    .message strong { display: block; font-size: 13px; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+    button { min-height: 42px; padding: 9px 12px; border: 1px solid #bfc9d5; border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    button:focus-visible { outline: 3px solid rgba(36, 88, 166, .24); outline-offset: 2px; }
+    button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    button.danger { border-color: #e4aaaa; background: var(--danger-soft); color: var(--danger); }
+    button:disabled { cursor: not-allowed; opacity: .46; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .walkthrough-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .walkthrough-head p { margin-bottom: 0; color: var(--muted); }
+    .steps { display: grid; gap: 8px; }
+    .step { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 10px; }
+    .step-number { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 50%; background: #edf0f3; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .step.done .step-number { background: var(--good-soft); color: var(--good); }
+    .step.current .step-number { background: var(--accent); color: #fff; }
+    .step button { width: 100%; text-align: left; }
+    .event-banner { margin-top: 16px; padding: 12px 14px; border-radius: 9px; background: var(--accent-soft); color: #173d72; font-weight: 700; }
+    .event-banner.denied { background: var(--danger-soft); color: var(--danger); }
+    .event-banner.blocked { background: var(--warn-soft); color: var(--warn); }
+    .audit-list { max-height: 380px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+    .audit-list li { display: grid; grid-template-columns: 54px 100px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .audit-list li:last-child { border-bottom: 0; }
+    .audit-step, .audit-result { color: var(--muted); font-weight: 700; }
+    footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: center; }
+    @media (max-width: 700px) {
+      main { width: min(100% - 20px, 1200px); margin-top: 18px; }
+      .panel { padding: 16px; }
+      .walkthrough-head { display: block; }
+      .walkthrough-head button { margin-top: 12px; }
+      .audit-list li { grid-template-columns: 42px 76px minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">R001 / r3 · Throwaway Logic Prototype</div>
+      <h1>从自然对话到受管 Workflow Run</h1>
+      <p class="lede">本原型只回答一个问题：用户只在群聊或 Bot 私聊提出任务时，平台能否自动路由、补充缺失信息、恢复同一个 Run，并让 Human 与专业 Agent 在清晰责任边界下完成工作。</p>
+    </header>
+
+    <div class="notice"><strong>完全合成、不可交付：</strong>页面不联网、不保存数据、不调用模型。Wake Router 与 Work Router 是平台服务，不是假装成 Agent 的大模型；茉莉是用户可见的默认负责人。</div>
+
+    <section class="panel" aria-labelledby="state-title">
+      <h2 id="state-title">当前完整状态</h2>
+      <div id="summary" class="summary-grid"></div>
+      <div class="section-grid">
+        <div class="state-block"><h3>会话消息</h3><div id="messages"></div></div>
+        <div class="state-block"><h3>Participant 与 Session</h3><div id="participants"></div></div>
+        <div class="state-block"><h3>Workflow Run</h3><div id="run"></div></div>
+        <div class="state-block"><h3>产物与数据访问</h3><div id="artifacts"></div></div>
+      </div>
+      <div id="event-banner" class="event-banner" role="status"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="free-play-title">
+      <h2 id="free-play-title">自由操作</h2>
+      <p class="lede">用户动作、平台动作、Agent 节点和 Human 节点使用不同按钮。顺序错误、关联错误、权限不足或旧上下文发布必须被明确拒绝。</p>
+      <div id="free-play" class="controls"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">五个引导场景</h2>
+      <div id="tabs" class="tabs" role="tablist"></div>
+      <div class="walkthrough-head">
+        <div><h3 id="scenario-title"></h3><p id="scenario-description"></p></div>
+        <button id="scenario-reset" class="primary" type="button">重置本场景</button>
+      </div>
+      <div id="steps" class="steps"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="audit-title">
+      <h2 id="audit-title">审计时间线</h2>
+      <p class="lede">每次消息、路由、Run 转移、Agent Attempt、Human 决定和发布 Gate 都需要可解释记录。</p>
+      <ul id="audit" class="audit-list"></ul>
+    </section>
+
+    <footer>PROTOTYPE — 只用于判断交互和状态模型；不能证明真实路由准确率、模型质量、采用率或生产安全。</footer>
+  </main>
+
+  <script>
+    const AccordModel = (() => {
+      const clone = (value) => JSON.parse(JSON.stringify(value));
+      const workflow = {
+        id: "internal-decision-brief",
+        revision: "v1",
+        name: "内部决策方案",
+        requiredInputs: ["decisionQuestion", "sourceScope"],
+        nodes: ["Researcher", "Analyst", "Reviewer", "Writer", "Human Approver", "Publish"]
+      };
+      const participantDefinitions = [
+        { id: "human-requester", name: "产品负责人", kind: "human", role: "请求者与结果使用者" },
+        { id: "human-approver", name: "审批负责人", kind: "human", role: "Human Review 与风险决定" },
+        { id: "jasmine", name: "茉莉", kind: "agent", role: "可见入口、Run Owner、唯一发布者" },
+        { id: "researcher", name: "Researcher", kind: "agent", role: "研究依据" },
+        { id: "analyst", name: "Analyst", kind: "agent", role: "方案比较" },
+        { id: "reviewer", name: "Reviewer", kind: "agent", role: "独立审查" },
+        { id: "writer", name: "Writer", kind: "agent", role: "最终方案编写" }
+      ];
+      const phaseLabels = {
+        IDLE: "等待自然消息",
+        DIRECT_AGENT: "指定 Agent 对话",
+        RUNNING: "Workflow 运行中",
+        WAITING_FOR_INPUT: "等待补充信息",
+        WAITING_HUMAN: "等待 Human Review",
+        READY_TO_PUBLISH: "等待唯一发布",
+        HOLD: "因新消息暂停",
+        BLOCKED: "节点失败待恢复",
+        PUBLISHED: "结果已发布"
+      };
+      const actionLabels = {
+        RESET: "重置原型",
+        SEND_DM_COMPLETE: "用户在 Bot 私聊提出完整任务",
+        SEND_GROUP_INCOMPLETE: "用户在群聊提出信息不足的任务",
+        PROVIDE_CLARIFICATION: "用户回复茉莉的追问",
+        SEND_EXPLICIT_MENTION: "用户在群聊明确 @Researcher",
+        DIRECT_REPLY: "Researcher 直接回复",
+        COMPLETE_RESEARCH: "Researcher 返回依据",
+        COMPLETE_ANALYSIS: "Analyst 返回方案比较",
+        COMPLETE_AGENT_REVIEW: "Reviewer 完成独立审查",
+        COMPLETE_WRITING: "Writer 返回最终草案",
+        HUMAN_APPROVE: "Human Approver 批准",
+        FAIL_NODE: "模拟当前 Agent 节点失败",
+        RETRY_NODE: "Workflow Engine 创建新 Attempt",
+        ATTEMPT_UNAUTHORIZED: "模拟 Agent 请求未授权资料",
+        NEW_MESSAGE: "最终发布前收到新消息",
+        REEVALUATE: "茉莉基于新消息重新判断",
+        PUBLISH: "茉莉发布唯一结果"
+      };
+
+      function initialState() {
+        return {
+          revision: 0,
+          phase: "IDLE",
+          conversation: null,
+          messages: [],
+          wake: { status: "空闲", service: "Wake Router（非 Agent）", recipients: [], reason: "无消息" },
+          route: { status: "未路由", service: "Work Router（非 Agent）", mode: "NONE", target: "无", reason: "无消息" },
+          run: null,
+          responseClaim: null,
+          freshness: "CURRENT",
+          hold: null,
+          participants: participantDefinitions.map((p) => ({ ...p, status: "空闲", sessionId: p.kind === "agent" ? "未创建" : "不适用", attempt: 0 })),
+          artifacts: [],
+          dataAccesses: [],
+          lastEvent: { result: "READY", message: "等待用户在群聊或 Bot 私聊中自然提出任务。" },
+          audit: [{ step: 0, action: "RESET", result: "READY", message: "创建无会话、无 Run 的初始状态。" }]
+        };
+      }
+
+      const participant = (state, id) => state.participants.find((p) => p.id === id);
+      const nextSeq = (state) => state.messages.length ? Math.max(...state.messages.map((m) => m.seq)) + 1 : 1;
+      const runId = (state) => `RUN-R001-${String(state.revision + 1).padStart(3, "0")}`;
+
+      function appendAudit(next, action, result, message) {
+        next.lastEvent = { result, message };
+        next.audit.push({ step: next.revision, action: action.type, result, message });
+      }
+      function accepted(state, action, mutate, message, result = "ACCEPTED") {
+        const next = clone(state);
+        next.revision += 1;
+        mutate(next);
+        appendAudit(next, action, result, message);
+        return next;
+      }
+      function rejected(state, action, message, result = "DENIED") {
+        const next = clone(state);
+        next.revision += 1;
+        appendAudit(next, action, result, message);
+        return next;
+      }
+      function addMessage(next, authorId, body, quotedChallenge = null) {
+        next.messages.push({ seq: nextSeq(next), authorId, body, quotedChallenge });
+      }
+      function startAgent(next, id, nodeName) {
+        const agent = participant(next, id);
+        agent.attempt += 1;
+        agent.status = `执行 ${nodeName}`;
+        agent.sessionId = `${agent.name}-RUN-${next.run.id}-A${agent.attempt}`;
+        next.run.currentNode = nodeName;
+        next.run.currentAgentId = id;
+        next.run.nodeAttempt = agent.attempt;
+      }
+      function finishAgent(next, id) {
+        participant(next, id).status = "已返回";
+      }
+      function baseConversation(kind, id, members) {
+        return { id, kind, members, maxSeq: 0 };
+      }
+      function createRun(next, inputs, sourceMessageSeq, waiting = false) {
+        const missing = workflow.requiredInputs.filter((key) => !inputs[key]);
+        const id = runId(next);
+        next.run = {
+          id,
+          definition: `${workflow.id}@${workflow.revision}`,
+          status: waiting || missing.length ? "WAITING_FOR_INPUT" : "RUNNING",
+          ownerAgentId: "jasmine",
+          sourceConversationId: next.conversation.id,
+          sourceMessageSeq,
+          inputs,
+          missingInputs: missing,
+          challengeId: missing.length ? `CH-${id}-1` : null,
+          currentNode: missing.length ? "Clarification" : "Researcher",
+          currentAgentId: missing.length ? "jasmine" : "researcher",
+          nodeAttempt: 0,
+          contextSeq: nextSeq(next) - 1,
+          resumeStatus: null,
+          failedAgentId: null
+        };
+        participant(next, "jasmine").status = missing.length ? "等待用户补充" : "负责中";
+        participant(next, "jasmine").attempt = 1;
+        participant(next, "jasmine").sessionId = `Jasmine-${id}-A1`;
+        next.responseClaim = { owner: "茉莉", subject: id, status: "有效", triggerSeq: sourceMessageSeq };
+        if (!missing.length) startAgent(next, "researcher", "Researcher");
+      }
+      function setupInbound(next, kind, conversationId, members, body) {
+        next.conversation = baseConversation(kind, conversationId, members);
+        addMessage(next, "human-requester", body);
+        next.conversation.maxSeq = 1;
+      }
+      function ensureRunNode(state, node, agentId) {
+        return state.run && state.phase === "RUNNING" && state.run.currentNode === node && state.run.currentAgentId === agentId && participant(state, agentId).status.startsWith("执行");
+      }
+      function addArtifact(next, kind, owner, title) {
+        next.artifacts.push({ kind, owner, title, runId: next.run.id, contextSeq: next.run.contextSeq });
+      }
+
+      function reduce(state, action) {
+        switch (action.type) {
+          case "RESET": return initialState();
+
+          case "SEND_DM_COMPLETE":
+            if (state.phase !== "IDLE") return rejected(state, action, "已有对话或 Run，不能再次创建入口。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              setupInbound(next, "direct", "DM-jasmine", ["human-requester", "jasmine"], "请基于合成需求和供应商资料，形成是否采用 AtlasSearch 的内部决策方案。资料范围仅限合成资料包。 ");
+              next.wake = { status: "已投递", service: "Wake Router（非 Agent）", recipients: ["茉莉"], reason: "Bot 私聊直接绑定茉莉" };
+              next.route = { status: "已匹配", service: "Work Router（非 Agent）", mode: "WORKFLOW_NEW", target: `${workflow.id}@${workflow.revision}`, reason: "意图与必填输入完整" };
+              createRun(next, { decisionQuestion: "是否采用 AtlasSearch", sourceScope: "完全合成资料包" }, 1, false);
+              next.phase = "RUNNING";
+            }, "用户只发送一条私聊消息；平台自动匹配工作流、创建唯一 Run、指定茉莉并启动 Researcher。", "AUTO_STARTED");
+
+          case "SEND_GROUP_INCOMPLETE":
+            if (state.phase !== "IDLE") return rejected(state, action, "已有对话或 Run，不能再次创建入口。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              setupInbound(next, "group", "GROUP-product", ["human-requester", "human-approver", "jasmine", "researcher", "analyst"], "我们需要一份是否采用 AtlasSearch 的内部决策方案。");
+              next.wake = { status: "已投递", service: "Wake Router（非 Agent）", recipients: ["茉莉"], reason: "普通群聊由平台入口处理，不广播启动所有昂贵 Agent" };
+              next.route = { status: "待补充", service: "Work Router（非 Agent）", mode: "WORKFLOW_NEW", target: `${workflow.id}@${workflow.revision}`, reason: "匹配到工作流，但缺少允许使用的资料范围" };
+              createRun(next, { decisionQuestion: "是否采用 AtlasSearch", sourceScope: null }, 1, true);
+              next.phase = "WAITING_FOR_INPUT";
+              addMessage(next, "jasmine", "我可以启动内部决策方案流程。首轮允许使用哪一组资料？", next.run.challengeId);
+              next.conversation.maxSeq = 2;
+              next.run.contextSeq = 2;
+            }, "Run 已创建但未调用专业 Agent；茉莉在原群聊提出一个具体追问。", "CLARIFICATION_ASKED");
+
+          case "PROVIDE_CLARIFICATION":
+            if (state.phase !== "WAITING_FOR_INPUT" || !state.run || !state.run.challengeId) return rejected(state, action, "没有等待回答的 Workflow Challenge。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              const originalRunId = next.run.id;
+              addMessage(next, "human-requester", "仅使用完全合成资料包。", next.run.challengeId);
+              next.conversation.maxSeq = nextSeq(next) - 1;
+              next.route = { status: "已恢复", service: "Work Router（非 Agent）", mode: "WORKFLOW_RESUME", target: originalRunId, reason: `conversation + challenge ${next.run.challengeId} 精确关联` };
+              next.run.inputs.sourceScope = "完全合成资料包";
+              next.run.missingInputs = [];
+              next.run.challengeId = null;
+              next.run.status = "RUNNING";
+              next.run.contextSeq = next.conversation.maxSeq;
+              next.responseClaim.triggerSeq = next.conversation.maxSeq;
+              startAgent(next, "researcher", "Researcher");
+              next.phase = "RUNNING";
+            }, "用户回复恢复原 Run；没有创建第二个 Run，Researcher 现在才被调用。", "RESUMED");
+
+          case "SEND_EXPLICIT_MENTION":
+            if (state.phase !== "IDLE") return rejected(state, action, "已有对话或 Run，不能再次创建入口。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              setupInbound(next, "group", "GROUP-research", ["human-requester", "jasmine", "researcher"], "@researcher 请只列出合成资料包中的供应商事实，不需要形成决策方案。");
+              next.wake = { status: "已投递", service: "Wake Router（非 Agent）", recipients: ["Researcher"], reason: "显式 @Agent" };
+              next.route = { status: "直接指派", service: "Work Router（非 Agent）", mode: "DIRECT_AGENT", target: "Researcher", reason: "用户明确指定 Agent，且请求不要求内部决策方案闭环" };
+              next.responseClaim = { owner: "Researcher", subject: "message-seq-1", status: "有效", triggerSeq: 1 };
+              const researcher = participant(next, "researcher");
+              researcher.attempt = 1;
+              researcher.status = "直接响应中";
+              researcher.sessionId = "Researcher-DIRECT-A1";
+              next.phase = "DIRECT_AGENT";
+            }, "显式 @Researcher 进入直接 Agent 模式，不错误创建 Workflow Run。", "DIRECT_ROUTED");
+
+          case "DIRECT_REPLY":
+            if (state.phase !== "DIRECT_AGENT" || state.responseClaim?.owner !== "Researcher") return rejected(state, action, "没有属于 Researcher 的有效直接响应 Claim。", "DENIED");
+            return accepted(state, action, (next) => {
+              addMessage(next, "researcher", "已整理合成资料中的三项供应商事实；未形成推荐结论。");
+              next.conversation.maxSeq = nextSeq(next) - 1;
+              next.responseClaim.status = "已释放";
+              participant(next, "researcher").status = "已完成";
+              next.phase = "PUBLISHED";
+            }, "Researcher 只完成被明确指定的事实整理，没有越权启动完整工作流。", "PUBLISHED");
+
+          case "COMPLETE_RESEARCH":
+            if (!ensureRunNode(state, "Researcher", "researcher")) return rejected(state, action, "当前 Run 没有可完成的 Researcher 节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              finishAgent(next, "researcher");
+              addArtifact(next, "research", "Researcher", "合成来源与事实清单");
+              startAgent(next, "analyst", "Analyst");
+            }, "Researcher 通过结构化产物交给 Analyst；两者 Session 隔离。", "NODE_COMPLETED");
+
+          case "COMPLETE_ANALYSIS":
+            if (!ensureRunNode(state, "Analyst", "analyst")) return rejected(state, action, "当前 Run 没有可完成的 Analyst 节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              finishAgent(next, "analyst");
+              addArtifact(next, "analysis", "Analyst", "备选方案、比较标准与推荐草案");
+              startAgent(next, "reviewer", "Reviewer");
+            }, "Analyst 返回比较结果，Reviewer 使用独立 Session 检查。", "NODE_COMPLETED");
+
+          case "COMPLETE_AGENT_REVIEW":
+            if (!ensureRunNode(state, "Reviewer", "reviewer")) return rejected(state, action, "当前 Run 没有可完成的 Reviewer 节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              finishAgent(next, "reviewer");
+              addArtifact(next, "review", "Reviewer", "证据、遗漏、风险与结论边界检查");
+              startAgent(next, "writer", "Writer");
+            }, "Agent Reviewer 通过，Writer 只消费已审查的结构化产物。", "NODE_COMPLETED");
+
+          case "COMPLETE_WRITING":
+            if (!ensureRunNode(state, "Writer", "writer")) return rejected(state, action, "当前 Run 没有可完成的 Writer 节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              finishAgent(next, "writer");
+              addArtifact(next, "decision-brief", "Writer", "内部决策方案最终草案");
+              next.run.currentNode = "Human Approver";
+              next.run.currentAgentId = null;
+              next.run.status = "WAITING_HUMAN";
+              participant(next, "human-approver").status = "等待审批";
+              next.phase = "WAITING_HUMAN";
+            }, "Agent 节点完成后进入 Human Review；Agent 不能代替人类批准。", "WAITING_HUMAN");
+
+          case "HUMAN_APPROVE":
+            if (state.phase !== "WAITING_HUMAN" || state.run?.status !== "WAITING_HUMAN") return rejected(state, action, "当前没有等待 Human Review 的 Run。", "DENIED");
+            return accepted(state, action, (next) => {
+              addMessage(next, "human-approver", "批准该合成决策方案进入最终发布。 ");
+              next.conversation.maxSeq = nextSeq(next) - 1;
+              participant(next, "human-approver").status = "已批准";
+              next.run.status = "READY_TO_PUBLISH";
+              next.run.currentNode = "Publish";
+              next.run.contextSeq = next.conversation.maxSeq;
+              next.phase = "READY_TO_PUBLISH";
+            }, "Human Approver 给出明确决定；茉莉仍需通过 Freshness 和 Claim Gate。", "APPROVED");
+
+          case "FAIL_NODE": {
+            if (!state.run || state.phase !== "RUNNING" || !state.run.currentAgentId) return rejected(state, action, "当前没有可模拟失败的 Agent 节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              const failed = participant(next, next.run.currentAgentId);
+              failed.status = "Attempt 失败";
+              next.run.failedAgentId = failed.id;
+              next.run.resumeStatus = { node: next.run.currentNode, agentId: failed.id };
+              next.run.status = "BLOCKED";
+              next.phase = "BLOCKED";
+            }, "当前 Attempt 失败并释放执行资格；Run 保留节点与输入，等待显式重试。", "BLOCKED");
+          }
+
+          case "RETRY_NODE":
+            if (state.phase !== "BLOCKED" || !state.run?.failedAgentId) return rejected(state, action, "当前没有可重试的失败节点。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              const resume = next.run.resumeStatus;
+              next.run.status = "RUNNING";
+              next.run.failedAgentId = null;
+              next.run.resumeStatus = null;
+              startAgent(next, resume.agentId, resume.node);
+              next.phase = "RUNNING";
+            }, "Workflow Engine 为同一 Run 创建新 Attempt 和新 Session，没有丢失已确认输入。", "RETRIED");
+
+          case "ATTEMPT_UNAUTHORIZED":
+            if (!state.run) return rejected(state, action, "没有 Workflow Run 可产生数据访问。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              next.dataAccesses.push({ agent: next.run.currentAgentId ? participant(next, next.run.currentAgentId).name : "茉莉", resource: "corp://real-contracts", decision: "拒绝", reason: "R001 仅允许完全合成资料" });
+            }, "未授权资料访问被策略层阻止；Run 可以继续使用合成资料。", "DENIED");
+
+          case "NEW_MESSAGE":
+            if (!state.run || !["RUNNING", "WAITING_HUMAN", "READY_TO_PUBLISH"].includes(state.phase)) return rejected(state, action, "当前状态不适合模拟最终输出过期。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              addMessage(next, "human-requester", "补充约束：推荐方案不得依赖外部托管服务。 ");
+              next.conversation.maxSeq = nextSeq(next) - 1;
+              next.hold = { previousPhase: next.phase, previousRunStatus: next.run.status, reason: `Run context seq ${next.run.contextSeq} < conversation seq ${next.conversation.maxSeq}` };
+              next.run.status = "HOLD";
+              next.freshness = "STALE";
+              next.phase = "HOLD";
+            }, "新消息使现有草案或节点上下文过期；发布必须暂停。", "HELD");
+
+          case "REEVALUATE":
+            if (state.phase !== "HOLD" || state.freshness !== "STALE" || !state.hold) return rejected(state, action, "没有等待重新判断的过期 Run。", "ILLEGAL");
+            return accepted(state, action, (next) => {
+              next.run.contextSeq = next.conversation.maxSeq;
+              next.run.status = next.hold.previousRunStatus;
+              next.phase = next.hold.previousPhase;
+              next.freshness = "CURRENT";
+              next.hold = null;
+              next.responseClaim.triggerSeq = next.conversation.maxSeq;
+              next.artifacts.forEach((artifact) => { artifact.contextSeq = next.run.contextSeq; });
+            }, "茉莉把新增约束纳入同一 Run，更新 Context/Freshness 后恢复。", "REFRESHED");
+
+          case "PUBLISH":
+            if (state.phase === "HOLD" || state.freshness !== "CURRENT") return rejected(state, action, "Freshness Gate 阻止基于旧上下文发布。", "DENIED");
+            if (state.phase !== "READY_TO_PUBLISH" || state.run?.status !== "READY_TO_PUBLISH") return rejected(state, action, "Run 尚未完成 Agent 节点与 Human Review。", "DENIED");
+            if (state.responseClaim?.owner !== "茉莉" || state.responseClaim.status !== "有效") return rejected(state, action, "茉莉没有有效的唯一 Response Claim。", "DENIED");
+            return accepted(state, action, (next) => {
+              addMessage(next, "jasmine", "内部决策方案已完成：建议采用可自建部署的受限方案，依据、风险和待确认项见合成方案。 ");
+              next.conversation.maxSeq = nextSeq(next) - 1;
+              next.run.status = "PUBLISHED";
+              next.run.currentNode = "Completed";
+              next.responseClaim.status = "已释放";
+              participant(next, "jasmine").status = "已完成";
+              next.phase = "PUBLISHED";
+            }, "茉莉在原会话发布一个经过 Human Review 且基于最新上下文的唯一结果。", "PUBLISHED");
+
+          default: return rejected(state, action, `未知动作：${action.type}`, "ILLEGAL");
+        }
+      }
+      return { initialState, reduce, phaseLabels, actionLabels, workflow };
+    })();
+
+    const freePlayActions = [
+      "SEND_DM_COMPLETE", "SEND_GROUP_INCOMPLETE", "PROVIDE_CLARIFICATION", "SEND_EXPLICIT_MENTION", "DIRECT_REPLY",
+      "COMPLETE_RESEARCH", "COMPLETE_ANALYSIS", "COMPLETE_AGENT_REVIEW", "COMPLETE_WRITING", "HUMAN_APPROVE",
+      "FAIL_NODE", "RETRY_NODE", "ATTEMPT_UNAUTHORIZED", "NEW_MESSAGE", "REEVALUATE", "PUBLISH"
+    ];
+    const scenarios = [
+      {
+        title: "私聊自动启动",
+        description: "用户只发一条完整私聊请求，平台自动匹配工作流、创建 Run、调用 Agent，并在 Human Review 后由茉莉发布。",
+        steps: [
+          ["SEND_DM_COMPLETE", "用户向茉莉发送完整请求"], ["COMPLETE_RESEARCH", "Researcher 返回依据"],
+          ["COMPLETE_ANALYSIS", "Analyst 返回方案比较"], ["COMPLETE_AGENT_REVIEW", "Reviewer 完成独立审查"],
+          ["COMPLETE_WRITING", "Writer 返回最终草案"], ["HUMAN_APPROVE", "Human Approver 批准"], ["PUBLISH", "茉莉发布唯一结果"]
+        ]
+      },
+      {
+        title: "群聊追问与恢复",
+        description: "信息不足时先创建等待输入的 Run；茉莉只追问一个缺失项，用户回复后恢复原 Run，而不是新建任务。",
+        steps: [
+          ["SEND_GROUP_INCOMPLETE", "用户在群聊提出信息不足的任务"], ["PROVIDE_CLARIFICATION", "用户回复允许的资料范围"],
+          ["COMPLETE_RESEARCH", "观察原 Run 继续执行 Researcher"]
+        ]
+      },
+      {
+        title: "显式 @Agent",
+        description: "用户明确指定 Researcher 且不要求完整决策闭环时，进入直接 Agent 模式，不误启工作流。",
+        steps: [["SEND_EXPLICIT_MENTION", "用户在群聊 @Researcher"], ["DIRECT_REPLY", "Researcher 直接返回事实"]]
+      },
+      {
+        title: "节点失败与 Human Review",
+        description: "Agent Attempt 失败后，Workflow Engine 在同一 Run 中创建新 Attempt；Agent 不能替代 Human 批准。",
+        steps: [
+          ["SEND_DM_COMPLETE", "用户发送完整任务"], ["FAIL_NODE", "Researcher Attempt 失败"], ["RETRY_NODE", "创建新 Attempt"],
+          ["COMPLETE_RESEARCH", "Researcher 重试后返回"], ["COMPLETE_ANALYSIS", "Analyst 返回"],
+          ["COMPLETE_AGENT_REVIEW", "Reviewer 返回"], ["COMPLETE_WRITING", "Writer 返回草案"], ["HUMAN_APPROVE", "Human Approver 批准"]
+        ]
+      },
+      {
+        title: "权限与过期输出",
+        description: "未授权数据访问必须被拒绝；Human 已批准也不能绕过新消息造成的 Freshness Hold。",
+        steps: [
+          ["SEND_DM_COMPLETE", "用户发送完整任务"], ["ATTEMPT_UNAUTHORIZED", "Researcher 尝试访问真实合同"],
+          ["COMPLETE_RESEARCH", "继续使用合成资料"], ["COMPLETE_ANALYSIS", "Analyst 返回"],
+          ["COMPLETE_AGENT_REVIEW", "Reviewer 返回"], ["COMPLETE_WRITING", "Writer 返回草案"],
+          ["HUMAN_APPROVE", "Human Approver 批准"], ["NEW_MESSAGE", "发布前出现新增约束"],
+          ["PUBLISH", "尝试发布并观察被阻止"], ["REEVALUATE", "茉莉重新判断同一 Run"], ["PUBLISH", "发布最新唯一结果"]
+        ]
+      }
+    ];
+
+    let state = AccordModel.initialState();
+    let activeScenario = 0;
+    let scenarioStep = 0;
+    const escapeHtml = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+    const badgeClass = (value) => ["CURRENT", "PUBLISHED", "已恢复", "已匹配", "有效"].includes(value) ? "good" : ["STALE", "HOLD", "WAITING_FOR_INPUT", "等待补充", "待补充"].includes(value) ? "warn" : ["DENIED", "ILLEGAL", "拒绝"].includes(value) ? "danger" : "";
+
+    function renderSummary() {
+      const summary = [
+        ["用户入口", state.conversation ? `${state.conversation.kind} · ${state.conversation.id}` : "尚无会话", state.conversation ? `成员 ${state.conversation.members.length} · max seq ${state.conversation.maxSeq}` : "群聊或 Bot 私聊"],
+        ["产品阶段", AccordModel.phaseLabels[state.phase], state.phase],
+        ["Wake Router", state.wake.status, `${state.wake.recipients.join("、") || "无"} · ${state.wake.reason}`],
+        ["Work Router", state.route.mode, `${state.route.target} · ${state.route.reason}`],
+        ["Workflow Run", state.run ? state.run.id : "未创建", state.run ? `${state.run.definition} · ${state.run.status}` : "普通聊天不必创建 Run"],
+        ["唯一响应 Claim", state.responseClaim ? `${state.responseClaim.owner} · ${state.responseClaim.status}` : "无", state.responseClaim ? state.responseClaim.subject : "由代码建立，而非 prompt 礼让"],
+        ["上下文新鲜度", state.freshness, state.run ? `run seq ${state.run.contextSeq} / conversation seq ${state.conversation.maxSeq}` : "无 Run"],
+        ["当前节点", state.run ? state.run.currentNode : "无", state.run?.missingInputs?.length ? `缺少：${state.run.missingInputs.join("、")}` : "输入完整或无 Run"]
+      ];
+      document.querySelector("#summary").innerHTML = summary.map(([label, value, detail]) => `<div class="summary-card"><span class="label">${escapeHtml(label)}</span><span class="badge ${badgeClass(value)}">${escapeHtml(value)}</span><div class="subvalue">${escapeHtml(detail)}</div></div>`).join("");
+    }
+    function renderMessages() {
+      document.querySelector("#messages").innerHTML = state.messages.length ? state.messages.map((m) => {
+        const p = state.participants.find((x) => x.id === m.authorId);
+        return `<div class="message ${p?.kind === "agent" ? "agent" : ""}"><strong>#${m.seq} · ${escapeHtml(p?.name || m.authorId)} · ${escapeHtml(p?.kind || "system")}</strong>${escapeHtml(m.body)}${m.quotedChallenge ? `<div class="subvalue">correlation: ${escapeHtml(m.quotedChallenge)}</div>` : ""}</div>`;
+      }).join("") : '<p class="empty">用户尚未发送消息。</p>';
+    }
+    function renderParticipants() {
+      document.querySelector("#participants").innerHTML = `<table><thead><tr><th>身份</th><th>类型</th><th>状态</th><th>Session</th></tr></thead><tbody>${state.participants.map((p) => `<tr><td><strong>${escapeHtml(p.name)}</strong><div class="subvalue">${escapeHtml(p.role)}</div></td><td>${escapeHtml(p.kind)}</td><td>${escapeHtml(p.status)}</td><td>${escapeHtml(p.sessionId)}</td></tr>`).join("")}</tbody></table>`;
+    }
+    function renderRun() {
+      if (!state.run) { document.querySelector("#run").innerHTML = '<p class="empty">尚无 Workflow Run。显式 @Agent 的普通对话不必创建 Run。</p>'; return; }
+      const rows = [
+        ["Definition", state.run.definition], ["状态", state.run.status], ["Owner", state.run.ownerAgentId],
+        ["当前节点", state.run.currentNode], ["当前执行者", state.run.currentAgentId || "Human / 无"],
+        ["Attempt", String(state.run.nodeAttempt)], ["缺失输入", state.run.missingInputs.join("、") || "无"],
+        ["Challenge", state.run.challengeId || "无"], ["来源会话", `${state.run.sourceConversationId}#${state.run.sourceMessageSeq}`]
+      ];
+      document.querySelector("#run").innerHTML = `<table><tbody>${rows.map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join("")}</tbody></table>`;
+    }
+    function renderArtifacts() {
+      const artifactHtml = state.artifacts.length ? `<table><thead><tr><th>产物</th><th>Owner</th><th>上下文</th></tr></thead><tbody>${state.artifacts.map((a) => `<tr><td>${escapeHtml(a.title)}</td><td>${escapeHtml(a.owner)}</td><td>seq ${a.contextSeq}</td></tr>`).join("")}</tbody></table>` : '<p class="empty">尚无 Agent 产物。</p>';
+      const accessHtml = state.dataAccesses.length ? `<h3 style="margin-top:16px">访问拒绝</h3><table><tbody>${state.dataAccesses.map((a) => `<tr><td>${escapeHtml(a.agent)}</td><td>${escapeHtml(a.resource)}</td><td><span class="badge danger">${escapeHtml(a.decision)}</span><div class="subvalue">${escapeHtml(a.reason)}</div></td></tr>`).join("")}</tbody></table>` : "";
+      document.querySelector("#artifacts").innerHTML = artifactHtml + accessHtml;
+    }
+    function renderEvent() {
+      const banner = document.querySelector("#event-banner");
+      banner.className = `event-banner ${["DENIED", "ILLEGAL"].includes(state.lastEvent.result) ? "denied" : ["BLOCKED", "HELD"].includes(state.lastEvent.result) ? "blocked" : ""}`;
+      banner.textContent = `${state.lastEvent.result}：${state.lastEvent.message}`;
+    }
+    function renderAudit() {
+      document.querySelector("#audit").innerHTML = [...state.audit].reverse().map((e) => `<li><span class="audit-step">#${e.step}</span><span class="audit-result">${escapeHtml(e.result)}</span><span><strong>${escapeHtml(AccordModel.actionLabels[e.action] || e.action)}</strong><br>${escapeHtml(e.message)}</span></li>`).join("");
+    }
+    function dispatch(type) { state = AccordModel.reduce(state, { type }); render(); }
+    function renderFreePlay() {
+      const actions = [{ type: "RESET", className: "danger" }, ...freePlayActions.map((type) => ({ type, className: "" }))];
+      document.querySelector("#free-play").innerHTML = actions.map((a) => `<button type="button" class="${a.className}" data-action="${a.type}">${escapeHtml(AccordModel.actionLabels[a.type])}</button>`).join("");
+      document.querySelectorAll("#free-play [data-action]").forEach((b) => b.addEventListener("click", () => dispatch(b.dataset.action)));
+    }
+    function resetScenario() { state = AccordModel.initialState(); scenarioStep = 0; render(); }
+    function renderWalkthrough() {
+      document.querySelector("#tabs").innerHTML = scenarios.map((s, i) => `<button type="button" class="tab ${i === activeScenario ? "active" : ""}" data-scenario="${i}" role="tab" aria-selected="${i === activeScenario}">${escapeHtml(s.title)}</button>`).join("");
+      document.querySelectorAll("[data-scenario]").forEach((b) => b.addEventListener("click", () => { activeScenario = Number(b.dataset.scenario); resetScenario(); }));
+      const scenario = scenarios[activeScenario];
+      document.querySelector("#scenario-title").textContent = scenario.title;
+      document.querySelector("#scenario-description").textContent = scenario.description;
+      document.querySelector("#steps").innerHTML = scenario.steps.map(([action, label], i) => `<div class="step ${i < scenarioStep ? "done" : i === scenarioStep ? "current" : ""}"><span class="step-number">${i + 1}</span><button type="button" data-step="${i}" ${i === scenarioStep ? "" : "disabled"}>${escapeHtml(label)}</button></div>`).join("");
+      document.querySelectorAll("[data-step]").forEach((b) => b.addEventListener("click", () => { const i = Number(b.dataset.step); if (i !== scenarioStep) return; dispatch(scenario.steps[i][0]); scenarioStep += 1; render(); }));
+    }
+    function render() { renderSummary(); renderMessages(); renderParticipants(); renderRun(); renderArtifacts(); renderEvent(); renderAudit(); renderFreePlay(); renderWalkthrough(); }
+    document.querySelector("#scenario-reset").addEventListener("click", resetScenario);
+    render();
+  </script>
+</body>
+</html>

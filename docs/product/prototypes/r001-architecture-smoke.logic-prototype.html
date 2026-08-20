@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>R001 基础架构冒烟测试</title>
+  <style>
+    :root { color-scheme: light; --bg:#f3f5f8; --surface:#fff; --ink:#17202a; --muted:#667085; --line:#dce2e9; --accent:#2458a6; --accent-soft:#eaf1fb; --good:#16794a; --good-soft:#e9f7ef; --danger:#a62c2c; --danger-soft:#fdecec; --shadow:0 8px 24px rgba(24,39,75,.08); }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.55; }
+    main { width:min(1100px,calc(100% - 32px)); margin:32px auto 72px; }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { margin-bottom:8px; font-size:clamp(28px,4vw,42px); line-height:1.18; }
+    h2 { margin-bottom:16px; font-size:22px; }
+    h3 { margin-bottom:10px; font-size:16px; }
+    .eyebrow { margin-bottom:10px; color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    .lede { max-width:900px; color:var(--muted); }
+    .notice { margin:20px 0 24px; padding:14px 16px; border:1px solid #f0c36d; border-radius:10px; background:#fff3dc; color:#714200; }
+    .panel { margin-top:20px; padding:22px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:var(--shadow); }
+    .hero-action { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    button { min-height:42px; padding:9px 13px; border:1px solid #bfc9d5; border-radius:9px; background:#fff; color:var(--ink); font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
+    button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+    button:disabled { cursor:not-allowed; opacity:.45; }
+    button.primary { border-color:var(--accent); background:var(--accent); color:#fff; }
+    button.danger { border-color:#e4aaaa; background:var(--danger-soft); color:var(--danger); }
+    .result { margin-top:16px; padding:16px; border-radius:10px; background:var(--accent-soft); color:#173d72; font-weight:800; }
+    .result.pass { background:var(--good-soft); color:var(--good); }
+    .result.fail { background:var(--danger-soft); color:var(--danger); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+    .card { min-height:104px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#fbfcfd; }
+    .label { display:block; margin-bottom:6px; color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+    .value { font-weight:800; overflow-wrap:anywhere; }
+    .subvalue { margin-top:4px; color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+    .badge { display:inline-flex; align-items:center; min-height:26px; padding:3px 9px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:800; }
+    .badge.pass { background:var(--good-soft); color:var(--good); }
+    .badge.fail { background:var(--danger-soft); color:var(--danger); }
+    .controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:10px; }
+    .steps { display:grid; gap:8px; }
+    .step { display:grid; grid-template-columns:36px minmax(0,1fr); align-items:center; gap:10px; }
+    .step-number { display:grid; width:30px; height:30px; place-items:center; border-radius:50%; background:#edf0f3; color:var(--muted); font-size:12px; font-weight:800; }
+    .step.done .step-number { background:var(--good-soft); color:var(--good); }
+    .step.current .step-number { background:var(--accent); color:#fff; }
+    .step button { width:100%; text-align:left; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+    th { color:var(--muted); font-size:12px; }
+    tr:last-child td { border-bottom:0; }
+    .two-column { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:16px; }
+    .block { padding:16px; border:1px solid var(--line); border-radius:10px; }
+    .audit { margin:0; padding:0; list-style:none; }
+    .audit li { display:grid; grid-template-columns:46px 110px minmax(0,1fr); gap:8px; padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
+    .audit li:last-child { border-bottom:0; }
+    .muted { color:var(--muted); }
+    footer { margin-top:24px; color:var(--muted); font-size:12px; text-align:center; }
+    @media(max-width:700px){ main{width:min(100% - 20px,1100px);margin-top:18px}.panel{padding:16px}.audit li{grid-template-columns:38px 82px minmax(0,1fr)} }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">R001 / r5 · One Architecture Smoke Test</div>
+      <h1>一条消息跑通基础架构闭环</h1>
+      <p class="lede">只验证一件事：自然消息能否经过 Wake、工作流匹配、追问、同一 Run 恢复、Agent 节点、Human Approval 和唯一发布。这里不测试质量、性能或真实集成。</p>
+    </header>
+
+    <div class="notice"><strong>抛弃式原型：</strong>固定合成数据、纯内存、无网络、无模型、无持久化。Wake Router 和 Work Router 是平台服务；茉莉是唯一可见 Response Owner。</div>
+
+    <section class="panel">
+      <h2>一键冒烟测试</h2>
+      <div class="hero-action">
+        <button id="run-all" class="primary" type="button">运行完整冒烟测试</button>
+        <button id="reset" class="danger" type="button">重置</button>
+      </div>
+      <div id="result" class="result">尚未运行。</div>
+    </section>
+
+    <section class="panel">
+      <h2>当前状态</h2>
+      <div id="summary" class="grid"></div>
+      <div class="two-column" style="margin-top:16px">
+        <div class="block"><h3>消息</h3><div id="messages"></div></div>
+        <div class="block"><h3>六项断言</h3><div id="assertions"></div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>逐步走查</h2>
+      <p class="lede">这仍是同一个测试，只是允许逐步观察每个架构边界。</p>
+      <div id="steps" class="steps"></div>
+    </section>
+
+    <section class="panel">
+      <h2>自由操作</h2>
+      <p class="lede">顺序不合法的动作应被拒绝，不得偷偷创建第二个 Run 或提前调用 Agent。</p>
+      <div id="free-play" class="controls"></div>
+    </section>
+
+    <section class="panel">
+      <h2>审计记录</h2>
+      <ul id="audit" class="audit"></ul>
+    </section>
+
+    <footer>PROTOTYPE — PASS 只说明这一个纯逻辑闭环成立，不代表 MagicChat、Runtime、模型或生产系统已经集成。</footer>
+  </main>
+
+  <script>
+    const SmokeModel = (() => {
+      const clone = (value) => JSON.parse(JSON.stringify(value));
+      const actionLabels = {
+        RECEIVE_MESSAGE: "用户在群聊提出任务",
+        MATCH_WORKFLOW: "Wake/Work Router 匹配工作流",
+        ASK_CLARIFICATION: "茉莉追问资料范围",
+        RESUME_RUN: "用户回复并恢复同一 Run",
+        COMPLETE_RESEARCH: "Researcher 返回合成依据",
+        HUMAN_APPROVE: "Human Approver 批准",
+        PUBLISH: "茉莉发布唯一结果"
+      };
+      function initialState() {
+        return {
+          revision: 0,
+          phase: "IDLE",
+          conversationId: "GROUP-SMOKE-001",
+          messageSeq: 0,
+          messages: [],
+          wake: "IDLE",
+          route: "NONE",
+          run: null,
+          createdRunIds: [],
+          responseOwner: null,
+          responseClaim: null,
+          agentCalls: [],
+          humanApproved: false,
+          finalResponseCount: 0,
+          prematureAgentCall: false,
+          audit: [{ step: 0, action: "RESET", result: "READY", detail: "等待用户消息。" }],
+          lastResult: "READY"
+        };
+      }
+      function record(next, action, result, detail) {
+        next.lastResult = result;
+        next.audit.push({ step: next.revision, action: action.type, result, detail });
+      }
+      function accept(state, action, mutate, detail) {
+        const next = clone(state); next.revision += 1; mutate(next); record(next, action, "ACCEPTED", detail); return next;
+      }
+      function deny(state, action, detail) {
+        const next = clone(state); next.revision += 1; record(next, action, "DENIED", detail); return next;
+      }
+      function addMessage(next, author, body) {
+        next.messageSeq += 1; next.messages.push({ seq: next.messageSeq, author, body });
+      }
+      function reduce(state, action) {
+        switch (action.type) {
+          case "RECEIVE_MESSAGE":
+            if (state.phase !== "IDLE") return deny(state, action, "入口只允许创建一次。 ");
+            return accept(state, action, (next) => {
+              addMessage(next, "Human", "请形成是否采用 AtlasSearch 的内部决策方案。 ");
+              next.wake = "EVENT_RECEIVED";
+              next.phase = "MESSAGE_RECEIVED";
+            }, "消息持久化并产生 WakeEvent。 ");
+          case "MATCH_WORKFLOW":
+            if (state.phase !== "MESSAGE_RECEIVED") return deny(state, action, "只有新消息可以匹配工作流。 ");
+            return accept(state, action, (next) => {
+              const id = "RUN-SMOKE-001";
+              next.route = "internal-decision-brief@v1";
+              next.run = { id, status: "COLLECTING_INPUT", missing: ["sourceScope"], resumeCount: 0, currentNode: "Clarification" };
+              next.createdRunIds.push(id);
+              next.responseOwner = "茉莉";
+              next.responseClaim = { owner: "茉莉", status: "ACTIVE" };
+              next.phase = "COLLECTING_INPUT";
+            }, "创建唯一 Run 和唯一 Response Owner；未调用专业 Agent。 ");
+          case "ASK_CLARIFICATION":
+            if (state.phase !== "COLLECTING_INPUT" || !state.run?.missing.length) return deny(state, action, "没有缺失输入需要追问。 ");
+            return accept(state, action, (next) => {
+              addMessage(next, "茉莉", "本次允许使用哪一组资料？");
+              next.run.status = "WAITING_FOR_INPUT";
+              next.phase = "WAITING_FOR_INPUT";
+            }, "茉莉在原会话提出一个具体问题。 ");
+          case "RESUME_RUN":
+            if (state.phase !== "WAITING_FOR_INPUT" || !state.run) return deny(state, action, "没有等待回复的 Run。 ");
+            return accept(state, action, (next) => {
+              const sameRunId = next.run.id;
+              addMessage(next, "Human", "仅使用完全合成资料包。 ");
+              next.run.id = sameRunId;
+              next.run.missing = [];
+              next.run.resumeCount += 1;
+              next.run.status = "RUNNING";
+              next.run.currentNode = "Researcher";
+              next.agentCalls.push({ agent: "Researcher", afterInputComplete: true, attempt: 1 });
+              next.phase = "RUNNING";
+            }, "按 conversation + Run 恢复同一个 Run，然后才调用 Researcher。 ");
+          case "COMPLETE_RESEARCH":
+            if (state.phase !== "RUNNING" || state.run?.currentNode !== "Researcher") return deny(state, action, "当前没有 Researcher 节点。 ");
+            return accept(state, action, (next) => {
+              next.run.status = "WAITING_HUMAN";
+              next.run.currentNode = "Human Approval";
+              next.phase = "WAITING_HUMAN";
+            }, "Researcher 返回固定合成依据，Run 等待 Human Approval。 ");
+          case "HUMAN_APPROVE":
+            if (state.phase !== "WAITING_HUMAN") return deny(state, action, "当前没有等待 Human Approval。 ");
+            return accept(state, action, (next) => {
+              addMessage(next, "Human Approver", "批准发布该合成结果。 ");
+              next.humanApproved = true;
+              next.run.status = "READY_TO_PUBLISH";
+              next.run.currentNode = "Publish";
+              next.phase = "READY_TO_PUBLISH";
+            }, "Human 明确批准；Agent 不能替代该决定。 ");
+          case "PUBLISH":
+            if (!state.humanApproved) return deny(state, action, "Human Approval 前禁止发布。 ");
+            if (state.phase !== "READY_TO_PUBLISH" || state.responseClaim?.owner !== "茉莉" || state.responseClaim.status !== "ACTIVE") return deny(state, action, "发布状态或 Response Claim 无效。 ");
+            if (state.finalResponseCount > 0) return deny(state, action, "最终回复已经存在，Dedup 阻止重复发布。 ");
+            return accept(state, action, (next) => {
+              addMessage(next, "茉莉", "合成内部决策结果已完成。 ");
+              next.finalResponseCount += 1;
+              next.responseClaim.status = "RELEASED";
+              next.run.status = "PUBLISHED";
+              next.run.currentNode = "Completed";
+              next.phase = "PUBLISHED";
+            }, "茉莉在原会话发布唯一结果并释放 Claim。 ");
+          default: return deny(state, action, `未知动作 ${action.type}`);
+        }
+      }
+      function assertions(state) {
+        const firstAgentAudit = state.audit.findIndex((e) => e.action === "RESUME_RUN" && e.result === "ACCEPTED");
+        const clarificationAudit = state.audit.findIndex((e) => e.action === "ASK_CLARIFICATION" && e.result === "ACCEPTED");
+        return [
+          { id: "A1", label: "全程只有一个 Workflow Run", pass: state.createdRunIds.length === 1 && new Set(state.createdRunIds).size === 1 },
+          { id: "A2", label: "信息补全前没有调用专业 Agent", pass: !state.prematureAgentCall && firstAgentAudit > clarificationAudit && state.agentCalls.every((c) => c.afterInputComplete) },
+          { id: "A3", label: "用户回复恢复原 Run", pass: state.run?.id === "RUN-SMOKE-001" && state.run.resumeCount === 1 },
+          { id: "A4", label: "只有一个 Response Owner", pass: state.responseOwner === "茉莉" && state.responseClaim?.owner === "茉莉" },
+          { id: "A5", label: "Human Approval 后才允许发布", pass: state.humanApproved && state.audit.findIndex((e) => e.action === "HUMAN_APPROVE" && e.result === "ACCEPTED") < state.audit.findIndex((e) => e.action === "PUBLISH" && e.result === "ACCEPTED") },
+          { id: "A6", label: "最终只回复一次且有完整审计", pass: state.finalResponseCount === 1 && state.messages.filter((m) => m.author === "茉莉" && m.body.includes("结果已完成")).length === 1 && state.audit.filter((e) => e.result === "ACCEPTED").length === 7 }
+        ];
+      }
+      return { initialState, reduce, assertions, actionLabels };
+    })();
+
+    const sequence = ["RECEIVE_MESSAGE", "MATCH_WORKFLOW", "ASK_CLARIFICATION", "RESUME_RUN", "COMPLETE_RESEARCH", "HUMAN_APPROVE", "PUBLISH"];
+    let state = SmokeModel.initialState();
+    let guidedStep = 0;
+    let lastAssertions = [];
+    const escapeHtml = (v) => String(v).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+
+    function dispatch(type) { state = SmokeModel.reduce(state, { type }); lastAssertions = SmokeModel.assertions(state); render(); }
+    function reset() { state = SmokeModel.initialState(); guidedStep = 0; lastAssertions = []; render(); }
+    function runAll() {
+      reset();
+      for (const type of sequence) state = SmokeModel.reduce(state, { type });
+      lastAssertions = SmokeModel.assertions(state);
+      guidedStep = sequence.length;
+      render();
+    }
+    function renderSummary() {
+      const values = [
+        ["阶段", state.phase, `revision ${state.revision}`],
+        ["Wake", state.wake, state.conversationId],
+        ["Work Route", state.route, state.run ? state.run.id : "无 Run"],
+        ["Run 状态", state.run?.status || "未创建", state.run?.currentNode || "无节点"],
+        ["Response Owner", state.responseOwner || "未建立", state.responseClaim ? state.responseClaim.status : "无 Claim"],
+        ["Agent 调用", String(state.agentCalls.length), state.agentCalls.map((c) => `${c.agent} A${c.attempt}`).join("、") || "无"],
+        ["Human Approval", state.humanApproved ? "YES" : "NO", "必须先于发布"],
+        ["最终回复数", String(state.finalResponseCount), "期望恰好 1"]
+      ];
+      document.querySelector("#summary").innerHTML = values.map(([l,v,d]) => `<div class="card"><span class="label">${escapeHtml(l)}</span><span class="value">${escapeHtml(v)}</span><div class="subvalue">${escapeHtml(d)}</div></div>`).join("");
+    }
+    function renderMessages() {
+      document.querySelector("#messages").innerHTML = state.messages.length ? `<table><thead><tr><th>Seq</th><th>Author</th><th>Message</th></tr></thead><tbody>${state.messages.map((m) => `<tr><td>${m.seq}</td><td>${escapeHtml(m.author)}</td><td>${escapeHtml(m.body)}</td></tr>`).join("")}</tbody></table>` : '<p class="muted">尚无消息。</p>';
+    }
+    function renderAssertions() {
+      const checks = lastAssertions.length ? lastAssertions : SmokeModel.assertions(state);
+      document.querySelector("#assertions").innerHTML = `<table><tbody>${checks.map((a) => `<tr><td>${a.id}</td><td>${escapeHtml(a.label)}</td><td><span class="badge ${a.pass ? "pass" : "fail"}">${a.pass ? "PASS" : "NOT YET"}</span></td></tr>`).join("")}</tbody></table>`;
+      const complete = state.phase === "PUBLISHED";
+      const pass = complete && checks.every((a) => a.pass);
+      const result = document.querySelector("#result");
+      result.className = `result ${complete ? pass ? "pass" : "fail" : ""}`;
+      result.textContent = complete ? pass ? "PASS：基础架构闭环和六项断言全部通过。" : "FAIL：闭环完成，但至少一项断言失败。" : `当前：${state.phase}。`;
+    }
+    function renderSteps() {
+      document.querySelector("#steps").innerHTML = sequence.map((type,i) => `<div class="step ${i < guidedStep ? "done" : i === guidedStep ? "current" : ""}"><span class="step-number">${i+1}</span><button type="button" data-step="${i}" ${i === guidedStep ? "" : "disabled"}>${escapeHtml(SmokeModel.actionLabels[type])}</button></div>`).join("");
+      document.querySelectorAll("[data-step]").forEach((b) => b.addEventListener("click", () => { const i=Number(b.dataset.step); if(i!==guidedStep)return; dispatch(sequence[i]); guidedStep += 1; render(); }));
+    }
+    function renderFreePlay() {
+      document.querySelector("#free-play").innerHTML = sequence.map((type) => `<button type="button" data-action="${type}">${escapeHtml(SmokeModel.actionLabels[type])}</button>`).join("");
+      document.querySelectorAll("[data-action]").forEach((b) => b.addEventListener("click", () => dispatch(b.dataset.action)));
+    }
+    function renderAudit() {
+      document.querySelector("#audit").innerHTML = [...state.audit].reverse().map((e) => `<li><span>#${e.step}</span><strong>${escapeHtml(e.result)}</strong><span><strong>${escapeHtml(SmokeModel.actionLabels[e.action] || e.action)}</strong><br>${escapeHtml(e.detail)}</span></li>`).join("");
+    }
+    function render() { renderSummary(); renderMessages(); renderAssertions(); renderSteps(); renderFreePlay(); renderAudit(); }
+    document.querySelector("#run-all").addEventListener("click", runAll);
+    document.querySelector("#reset").addEventListener("click", reset);
+    render();
+  </script>
+</body>
+</html>

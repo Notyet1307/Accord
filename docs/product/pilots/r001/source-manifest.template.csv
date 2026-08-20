@@ -1,0 +1,3 @@
+source_id,relative_path,owner,data_classification,approved_purpose,source_date,sha256,allowed_agents,network_egress,limitation
+SRC-001,<relative file path>,<data owner>,<PUBLIC|INTERNAL|CONFIDENTIAL>,R001-shadow-pilot,<YYYY-MM-DD>,<64 lowercase hex>,<comma-separated approved agent ids>,DENY,<known limitation>
+SRC-002,<relative file path>,<data owner>,<PUBLIC|INTERNAL|CONFIDENTIAL>,R001-shadow-pilot,<YYYY-MM-DD>,<64 lowercase hex>,<comma-separated approved agent ids>,DENY,<known limitation>

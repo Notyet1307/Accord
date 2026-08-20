@@ -1,0 +1,5 @@
+.DS_Store
+.pi-subagents/
+.env
+.env.*
+!.env.example
