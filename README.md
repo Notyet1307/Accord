@@ -158,7 +158,7 @@ R001 使用固定合成场景验证了以下逻辑：
 
 ### R002：非生产基础架构 Walking Skeleton
 
-状态：`COMMITTED`
+状态：`HOLD (r3)`
 
 R002 在真实官方 MagicChat App WebSocket 边界上验证了一个狭窄的非生产闭环，包括：
 
@@ -172,6 +172,8 @@ R002 在真实官方 MagicChat App WebSocket 边界上验证了一个狭窄的�
 - 最终只有一个 Run、一个逻辑结果和一条最终消息。
 
 R002 不证明真实 LLM 质量、真实企业数据安全、多副本生产运行或完整领域集成。
+
+R002/r2 的验证结果与 ADR-0001 作为 R002 范围内的历史证据保留；R002/r3 已停止现有 Delivery Spec、Admission 和 Harness 路径。后续 Release 只能继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束，不继承 Go Reference Harness、Atomic JSON Store、R002 内部模块划分或固定本地部署作为生产架构。
 
 参见：
 
@@ -263,7 +265,7 @@ Evidence-backed Release Decision
 
 根 README 不拥有生产实现语言、数据库、消息队列或部署形态。
 
-- R002 已接受的 Go 实现只是非生产 Conformance Harness；
+- R002/r2 的 Go 实现只作为已 HOLD Release 的历史非生产 Conformance 证据；
 - 生产 Coordination Plane 的语言必须由单独 Accepted ADR 决定；
 - Delivery Spec 和 Ticket 应引用 ADR，不应复制其理由；
 - 当前代码、锁文件和工具链配置拥有实际版本事实。

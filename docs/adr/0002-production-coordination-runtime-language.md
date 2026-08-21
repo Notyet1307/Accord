@@ -52,8 +52,8 @@ Accord 的生产协调平面应以 TypeScript/Node.js、Go 还是 Rust 为主要
 
 同时保留以下边界：
 
-1. **R002 Go Reference Harness 保留**  
-   它继续作为非生产 Conformance Surface，用于证明 MagicChat App WebSocket、持久幂等、崩溃重放和唯一回写行为，不因生产语言选择而重写。
+1. **R002 仅保留为历史证据**
+   R002/r3 已进入 HOLD。ADR-0001、Go Reference Harness 的既有结果和故障语义只作为 R002 范围内的历史证据；本提案只继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束，不授权继续交付或重写 R002 Harness。
 
 2. **MagicChat 保持外部 Go 系统**  
    Accord 通过官方 App WebSocket/API 集成，不为统一语言而 Fork 或直接访问 MagicChat 数据库。
@@ -235,7 +235,7 @@ Go 的主要优点：
 
 Go 仍适合：
 
-- 保留 R002 Conformance Harness；
+- 未来已承诺 Release 在满足 R002/r3 reopen condition 后明确选择的独立 Conformance 组件；
 - 后续高吞吐、低资源常驻 Gateway；
 - 与 MagicChat 紧邻但保持协议隔离的边界工具；
 - 独立 CLI 或运维 Agent。
@@ -326,36 +326,23 @@ packages/
 ├── adapters/
 ├── audit/
 └── testkit/
-
-conformance/
-└── r002-go/
 ```
 
-逻辑模块可以有独立 Owner 和 Contract，但第一阶段共享一个部署单元和同一事务边界。
+逻辑模块可以有独立 Owner 和 Contract，但第一阶段共享一个部署单元和同一事务边界。外部行为 Conformance 的实现、位置和语言由后续已承诺 Release 决定；本提案不继承 `conformance/r002-go` 作为生产布局。
 
 ---
 
-## 8. 与 R002 Go Harness 的关系
+## 8. 与 R002 历史证据的关系
 
-ADR-0001 已规定 R002 Go Harness 是非生产 Conformance Surface，而不是生产 Agent Hub 技术栈。
+ADR-0001 仅规定 R002 范围内的非生产边界；R002/r3 已进入 HOLD。其 Release、ADR、Go Reference Harness 既有结果和故障证据继续保留，但不构成本 ADR 的生产架构输入。
 
-本 ADR 接受后：
+本 ADR 若接受：
 
-- 不重写 R002 Harness；
-- 用同一外部行为测试验证 TypeScript 实现；
-- Go Harness 作为参考实现和故障语义证据；
-- TypeScript Production Core 必须重新通过 MagicChat WebSocket、重放、审批和唯一回写测试；
-- 测试通过不等于直接复用 Go Harness 内部结构。
-
-两者关系是：
-
-```text
-Go Harness
-    证明外部行为和失败语义
-
-TypeScript Production Core
-    实现生产目标并接受同类 Conformance Test
-```
+- 只继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束；
+- 不要求保留、运行、重写或交付 R002 Go Harness；
+- 不继承 Atomic JSON Store、单进程部署或 R002 内部模块划分；
+- Production Core 必须在其自身 walking skeleton 中直接验证适用的外部行为；
+- 只有这些行为无法在新的 production walking skeleton 中直接验证时，后续已承诺 Release 才能按 R002/r3 的 reopen condition 重新打开 R002。
 
 ---
 
@@ -372,13 +359,13 @@ TypeScript Production Core
 
 ### 负向后果
 
-- 生产仓库同时存在 TypeScript 与 Go；
+- 若后续 Release 另行选择 Go Conformance 组件，生产仓库可能同时存在 TypeScript 与 Go；
 - Node.js 需要明确 Event Loop、内存、Backpressure 和 Shutdown 纪律；
 - TypeScript 类型会在运行时擦除，必须额外执行 Schema Validation；
 - 单二进制分发和极低资源运行不如 Go/Rust；
 - 如果模块边界控制不严，容易形成大型耦合应用。
 
-这些风险通过清晰的 Conformance 边界、严格类型、运行时 Schema、模块化单体和持久状态约束控制。
+这些风险通过版本化外部行为约束、严格类型、运行时 Schema、模块化单体和持久状态约束控制。
 
 ---
 
@@ -444,8 +431,8 @@ VISION 不应因为本 ADR 接受而变成技术栈文档。
 1. 将 `Status` 改为 `ACCEPTED`；
 2. 在根 README 的技术栈段落链接本 ADR；
 3. 保持 `VISION.md` 技术中立；
-4. 不修改 ADR-0001 的 Go Harness 决定；
+4. 保留 ADR-0001 作为 R002-only 历史决定，不推广其 Go Harness、Atomic JSON Store 或内部模块划分；
 5. 为第一个 TypeScript Production Walking Skeleton 创建独立 Release；
 6. 先验证一个模块化单体，不提前拆微服务；
-7. 建立跨语言 Conformance Test；
+7. 由后续已承诺 Release 决定是否以及如何建立跨语言 Conformance Test；
 8. 在代码产生前固定 Contract、Idempotency 和 Recovery 验收标准。

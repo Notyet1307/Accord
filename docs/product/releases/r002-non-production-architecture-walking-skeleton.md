@@ -1,11 +1,11 @@
 # R002: 非生产基础架构 Walking Skeleton
 
 ## Metadata
-- status: COMMITTED
-- revision: r2
+- status: HOLD
+- revision: r3
 - owner: 产品负责人
 - product_stage: EVIDENCE
-- delivery_stage: NOT_STARTED
+- delivery_stage: STOPPED_BEFORE_ADMISSION
 - delivery_evidence_alignment: UNKNOWN
 
 ## Evidence ledger
@@ -19,6 +19,7 @@
 | FACT | 官方 MagicChat 源码固定在 `chaitin/MagicChat@0cc474e560020491eb5f9ff3abe557559eba22a7`；本地原生 `arm64` 构建并运行 PostgreSQL、Server、Document Server 和 Caddy，客户端、管理端、健康检查、管理员登录及数据库迁移均通过。 | `local-evidence:magicchat-r002/DEPLOYMENT-R002.md`；`20260820T113551Z-final-validation`，2026-08-20 | 本地 Caddy CA 未受 macOS 信任；上游基础镜像标签可变；文件存储和官方 Assistant 未启用。 |
 | FACT | MagicChat App 重放保持消息 ID 和 outbox cursor，但会生成新的 WebSocket envelope Event ID；最终故障测试的原 Event ID 为 `1b43a3a0-8dd5-4f41-9f6f-4a090301bc08`，重放 Event ID 为 `01890342-2535-42eb-bc3a-d9188f1ca4fb`，cursor 均为 `54`。 | `20260820T113643Z-after-send-replay/replay-correlation.txt` 与 `EVIDENCE.md`，2026-08-20 | Event ID 只能标识一次投递，不能单独作为跨重放幂等键。 |
 | DECISION | R002 的幂等身份改为稳定 Message ID/cursor、Run ID 和确定性 RPC/client-message ID 组合；Event ID 仅保留为投递审计字段。 | R002 故障证据与产品架构决定，2026-08-20 | 未来若接入没有持久幂等契约的外部 Runtime，仍需额外的 invocation result recovery。 |
+| DECISION | R002/r2 不再是 active Release；R002 进入 HOLD，停止现有 Delivery Spec、Admission 和 Harness 路径。 | 产品负责人决定，2026-08-21 | 保留 R002 证据和 ADR-0001 作为历史；后续 Release 只能继承明确列出的外部行为约束。 |
 | FACT | 真实 happy path 完成固定合成请求、一次追问、同一 Run 恢复、一次逻辑 Stub Runtime、发起人审批和唯一最终回复；Run 最终为 `PUBLISHED`，App outbox 为 0。 | `20260820T113621Z-happy-final`，2026-08-20 | 只覆盖一个固定 Workflow、一个会话、一个 Run 和合成数据。 |
 | FACT | 在最终 `message.send` 已被 MagicChat 持久接受、但 Stub App 尚未提交本地完成状态和 ACK 前注入崩溃；重启后使用新 Event ID 重放，恢复原 Pending Action，复用确定性 request/client-message ID，最终只有一个 Run、一个逻辑 Runtime 结果、一条最终消息记录且 outbox 为 0。 | `20260820T113643Z-after-send-replay`；最终技术独立审查，2026-08-20 | 证明的是当前单进程 Stub 与 MagicChat 持久消息幂等；不声称外部 Runtime 的物理 exactly-once。 |
 | FACT | Stub App 以非 Root 用户运行，无新增主机端口；容器只接收非敏感 App ID、只读 App secret 文件和专用可写状态目录，不能读取核心、管理员、数据库或合成用户凭据。 | `20260820T113551Z-final-validation/container-boundary.json`；最终技术独立审查，2026-08-20 | 仍是本地非生产容器边界，不是生产威胁模型或安全认证。 |
@@ -107,14 +108,14 @@
 - main_cost: 本机容器、合成账号/App、单进程 Stub 实现和故障证据；无外部模型费用或生产写入。
 - safest_default: 保持 R001 为 HOLD；在新的明确 Release 决策前，不把本 Skeleton 扩张为生产实现或模型试点。
 
-## Readiness
+## Prior readiness (r2)
 
 - verdict: READY_TO_COMMIT
 - reason: 狭窄非生产目标已跨真实 MagicChat 边界和关键回写崩溃窗口验证，最终独立审查为 PASS，且残余限制均明确在非目标内。
 - commit_effect: 仅确认 R002 Walking Skeleton 证据成立；不解除 R001 HOLD，不授权 SPEC、Ticket、生产化、真实数据或百智云 LLM 接入。
 - preservation_warning: 原始实现和证据位于本机未版本化 sandbox；清理前必须保留所需副本和哈希。
 
-## Commitment
+## Prior commitment (r2)
 
 - decision: COMMITTED
 - decided_by: 产品负责人
@@ -125,7 +126,22 @@
 - retained_boundaries: R001 继续 HOLD；百智云 LLM、官方 Assistant、MCP、S3、ASR、真实数据、生产化、外部 Runtime 物理 exactly-once 和多副本存储均未获授权。
 - next_gate: Commitment 时仓库尚未建立 Git 基线；进入 SPEC 前必须先通过 `setup-delivery-repository` 将本精确 Release 放入首个 accepted delivery base，并完成技术边界复核。
 
+## HOLD decision (r3)
+
+- decision: HOLD
+- decided_by: 产品负责人
+- decided_at: 2026-08-21
+- superseded_active_revision: R002/r2
+- reason: 本次输入构成 material product-direction drift；R002 的狭窄非生产验证不再作为当前交付方向继续推进。
+- next_evidence_action: NONE
+- reopen_condition: 只有未来某个已承诺 Release 明确需要独立验证 MagicChat App WebSocket、ACK、确定性回写和 post-send crash/replay 行为，并且这些行为无法在新的 production walking skeleton 中直接验证时，才重新打开 R002。
+- delivery_disposition: GitHub Delivery Spec #1 和子 Issue #2～#5 关闭为 `not planned / superseded`；不进入 Admission 或 Harness。
+- historical_artifacts: 保留本 Release 的全部修订、ADR-0001 和已有证据引用，不删除或改写历史技术结论。
+- inheritable_external_behavior_constraints: stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery、audit。
+- not_inherited: Go Reference Harness 的交付或生产使用、Atomic JSON Store、R002 内部模块划分、单进程本地部署、固定依赖与 MagicChat commit、现有 Delivery Spec 和 Ticket 图；ADR-0001 不适用于 R002 之外的生产架构。
+
 ## Revision history
 
 - r1: 定义候选 Walking Skeleton 与真实 MagicChat/本地模拟器边界决策。
 - r2: 采用并验证官方 MagicChat 本地核心 + R002 Stub App；记录 happy path、回写后崩溃重放、Event ID 非稳定修正、最终独立审查和 `READY_TO_COMMIT` 建议。
+- r3: 记录产品方向重置后的 HOLD 决定、`next_evidence_action: NONE`、重新打开条件、历史保留边界和现有交付图终止方式。

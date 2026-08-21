@@ -1454,6 +1454,7 @@ latency
 - `message.send` 成功后崩溃的重放恢复；
 - 最终只有一个 Run、一个逻辑 Stub Runtime 结果和一条最终消息；
 - R002 的 Go Harness 是非生产 Conformance Surface，不代表生产 Agent Hub 技术栈。
+- R002/r3 已进入 HOLD；上述内容只作为历史证据，现有 Delivery Spec、Ticket 图和独立 Harness 交付不再是 active work。后续 Release 只能继承其外部行为约束，不继承 Go、Atomic JSON Store 或内部模块划分作为生产架构。
 
 ## 15.2 尚未证明
 
@@ -1482,7 +1483,7 @@ latency
 以下是建议的能力实施顺序，不是 Accepted Release 编号。
 
 ```text
-Phase 0  保留 R002 基线与权威边界
+Phase 0  继承外部行为约束与权威边界
    │
    ▼
 Phase 1  Case + Typed Blackboard Foundation
@@ -1514,43 +1515,40 @@ Phase 4 可以在 Phase 2 之后并行开始，不需要等待动态激活。
 
 每个 Work Package 都应先编译成独立 Release/Delivery Spec，再拆成可执行 Ticket。
 
-## Phase 0：保留已验证基线
+## Phase 0：继承外部行为约束与权威边界
 
-### FND-01：R002 Conformance Baseline
+### FND-01：外部行为约束基线
 
 **目标**
 
-保留并可重复运行 R002 已验证行为。
+让后续已承诺 Release 能直接验证 R002 已证明的外部失败语义，而不继续交付或推广 R002 的实现结构。
 
 **输入**
 
-- R002 Release；
-- ADR-0001；
-- 现有 Go Reference Harness；
-- 合成 MagicChat 环境。
+- R002/r3 HOLD Release 及其历史证据；
+- 仅适用于 R002 的 ADR-0001；
+- 后续已承诺 Release 明确选择的 production walking skeleton 边界。
 
 **输出**
 
-- Happy Path 测试；
-- Crash-after-send Replay 测试；
-- 稳定 Identity 和 Idempotency 断言；
-- 可重复证据包。
+- stable identity、wait/resume 和 Human Approval 约束；
+- Response Claim、deterministic idempotency、Freshness 和 Dedup 约束；
+- crash recovery 和 audit 验收语义。
 
 **验收**
 
-- 同一输入只有一个 Run；
-- 同一逻辑 Runtime 结果只提交一次；
+- 适用的外部行为在新的 production walking skeleton 中直接验证；
+- 不把 Event ID 当作跨重放稳定身份；
 - Human Approval 前不能发布；
-- 重放后只有一条最终消息；
-- 未选择或暗示生产 Agent Hub 技术栈。
+- 重试或重放不得产生重复副作用或重复发布；
+- 未选择或暗示 Go Reference Harness、Atomic JSON Store 或 R002 内部模块是生产架构。
 
 **明确不做**
 
-- 真实 LLM；
-- 黑板；
-- 多 Agent；
-- 生产持久化；
-- 多副本。
+- 继续现有 R002 Delivery Spec 或 Ticket 图；
+- 独立交付 R002 Go Reference Harness；
+- 继承 R002 的单进程、本地部署或内部模块划分；
+- 在不满足 R002/r3 reopen condition 时重新打开 R002。
 
 ---
 
