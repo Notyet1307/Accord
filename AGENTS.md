@@ -12,3 +12,6 @@
 
 - Before creating or changing delivery issues, ready labels, dependencies, or Admission state, read `docs/agents/delivery-gate.md`, `docs/agents/issue-tracker.md`, and `docs/agents/triage-labels.md`.
 - When terminology or ADR scope can change the task, read `docs/agents/domain.md` and only the relevant glossary, context map, or accepted ADR.
+
+## vision愿景产品
+- For product direction, new capabilities, or cross-boundary architecture work, read `docs/product/VISION.md`. It is directional context, not implementation authority; Accepted Releases, Delivery Specs, Tickets, ADRs, and current implementation facts retain their existing ownership.

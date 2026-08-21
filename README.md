@@ -1,853 +1,321 @@
-长亭协序——企业级智能体协作与可信交付平台
+# Accord
 
-Chaitin Accord — Enterprise Agent Coordination & Trusted Delivery Platform
+> **企业级受管 Agent 协作与可信交付平台**  
+> **Enterprise Governed Agent Collaboration & Trusted Delivery Platform**
 
+Accord 让企业员工通过自然语言提出复杂目标，由受管 Agent 团队在一个可追踪的 `Case` 中协作，形成有证据、可审查、可审批、可交付并可验证结果的闭环。
 
-> **MagicChat-first，但 Agent Coordination 应当 Cumora-first。**
->
-> MagicChat 负责企业身份、组织、会话、审批和应用治理；
-> Cumora 提供多 Agent 成为“真实同事”所需的协作语义；
-> Hermes 主要提供可选 Runtime、Profile 和通用 Kanban 实现参考；
-> pi-ticket-planning 与 HerdrHarness-lite 继续拥有各自领域事实。
-
-不是在 MagicChat、Cumora、Hermes 之间三选一，而是分层使用。
+> **当前阶段：产品与架构证据阶段。**  
+> 本仓库尚不是可用于生产的完整平台。现有 Release、原型和 ADR 用于逐步验证产品假设、系统边界、幂等恢复和可信交付路径。
 
 ---
 
-# 一、Cumora 在最终架构中的准确位置
+## Accord 要解决什么问题
 
-Cumora 不是简单的 Agent Runtime，也不是普通多 Agent 编排器。
+企业使用 Agent 处理复杂任务时，常见问题不是“模型不会回答”，而是：
 
-它最有价值的是：
+- 用户不知道应该选择哪个 Agent；
+- 多个 Agent 的能力、权限和数据访问边界不可见；
+- Agent 之间逐级传递自然语言摘要，关键事实容易丢失；
+- 开放任务难以被固定流水线完整描述；
+- 多个 Agent 可能重复工作、并发碰撞或同时回复；
+- 人工补充信息后，系统无法可靠恢复原任务；
+- 生成的结论缺少来源、审查和责任边界；
+- 从“形成方案”到“真实执行”之间缺少可信交接；
+- 聊天记录、Agent 记忆和现实系统状态容易混成多个事实源。
 
-> **Agent 如何以独立身份存在、何时被唤醒、谁应该回答、如何避免并发碰撞、如何按需加载技能、如何与其他 Agent 协作。**
-
-因此最终架构应当是：
-
-```text
-┌─────────────────────────────────────────────┐
-│          MagicChat 企业协作与治理平面        │
-│                                             │
-│ 用户 / 组织 / SSO / 群聊 / Topic / 文件     │
-│ App 身份 / Choice / 权限 / 审批 / 审计       │
-└──────────────────────┬──────────────────────┘
-                       │ 可靠消息事件
-┌──────────────────────▼──────────────────────┐
-│       Agent Coordination Kernel             │
-│          主要借鉴 Cumora                    │
-│                                             │
-│ Agent Profile / Role                        │
-│ Skills Progressive Disclosure               │
-│ Wake Router / Inbox Triage                  │
-│ Message Claim / Freshness Gate              │
-│ Session Isolation / Runtime Routing         │
-│ Agent DM / Group / Delegation                │
-│ Memory Namespace                            │
-│ Concurrency / Cost / Observability           │
-└───────────────┬─────────────────┬───────────┘
-                │                 │
-       ┌────────▼────────┐  ┌─────▼──────────────┐
-       │ Runtime Adapters │  │ Domain Controllers │
-       │                  │  │                    │
-       │ Native LLM       │  │ pi-ticket-planning │
-       │ Pi RPC           │  │ HerdrHarness-lite  │
-       │ Hermes 可选      │  │ Git / GitHub       │
-       │ Codex            │  │ Release / Outcome  │
-       └──────────────────┘  └────────────────────┘
-```
-
-这里需要增加的真正新组件不是“大一统 Delivery Gateway”，而是拆成两个逻辑层：
-
-```text
-Agent Coordination Kernel
-    负责通用多 Agent 协作
-
-Delivery Control Core
-    负责 Planner、Admission、Harness 之间的领域可信交接
-```
-
-这两个层不能混在一起。
+Accord 的目标不是让更多 Agent 同时说话，而是让复杂任务形成一个可治理、可恢复、可验证的过程。
 
 ---
 
-# 二、MagicChat、Cumora、Hermes 的职责不一样
+## 产品模型
 
-| 项目                 | 最适合承担的层               | 核心问题                        |
-| ------------------ | --------------------- | --------------------------- |
-| MagicChat          | 企业协作和治理平面             | 人是谁、应用是谁、谁能看、谁能审批           |
-| Cumora             | 多 Agent 协作语义          | 哪个 Agent 应该醒、应该说什么、如何避免冲突   |
-| Hermes             | Agent Runtime 与通用任务执行 | Profile 如何运行、技能怎么装、通用任务怎么领取 |
-| pi-ticket-planning | 产品规划领域引擎              | 什么值得做、如何形成可执行 Ticket        |
-| HerdrHarness-lite  | 软件交付控制器               | Ticket 如何安全执行、审查、恢复和 Merge  |
-
-所以：
+Accord 的核心产品对象不是 Chat、Agent 或 Workflow，而是：
 
 ```text
-MagicChat 决定企业边界
-Cumora 决定 Agent 协作方式
-Hermes 决定一种可选运行方式
-Planner 决定产品与 Ticket
-Harness 决定交付状态
+Case
+├── Objective              用户目标与约束
+├── Conversation Refs      会话入口和补充输入
+├── Governed Blackboard    证据、问题、判断、方案和批评
+├── Workflow Runs          必须发生的步骤、等待和恢复
+├── Agent Activities       参与者、能力、Claim 和执行记录
+├── Human Decisions        决策、审批和风险接受
+├── Artifacts              报告、方案、Ticket、代码或其他产物
+└── External Outcomes      外部权威系统确认的真实结果
 ```
+
+用户看到的是一个企业任务协作空间；黑板、Workflow、Agent Runtime 和领域控制器是内部实现机制。
 
 ---
 
-# 三、具体应该从 Cumora 借鉴什么
+## 架构原则
 
-## 1. Agent 成为一等身份，而不只是不同 Prompt
-
-Cumora 的 Persona 不只是一个 `system_prompt`，而是一个明确的数据对象：
+Accord 的长期方向可以概括为：
 
 ```text
-Agent ID
-Name
-Role
-Style
-Model
-Company / Tenant
+Conversation-first
+Case-centered
+Blackboard-assisted
+Workflow-governed
+Human-authorized
+Authority-separated
 ```
 
-并且能够读取当前团队成员和各自角色。
+含义如下：
 
-MagicChat 应当增加：
-
-```ts
-interface AgentProfileV1 {
-  id: string;
-  appId: string;
-  name: string;
-  role: string;
-  description: string;
-
-  runtime: RuntimeRef;
-  modelPolicy: ModelPolicy;
-  toolPolicy: ToolPolicy;
-  memoryPolicy: MemoryPolicy;
-  collaborationPolicy: CollaborationPolicy;
-
-  skillBindings: SkillBinding[];
-  tenantId: string;
-  status: "active" | "disabled";
-}
-```
-
-这样：
-
-```text
-茉莉
-Ticket Planner
-Delivery Controller
-Security Researcher
-Solution Architect
-```
-
-才是真正独立的 Agent，而不是同一个茉莉根据 Prompt 假扮不同角色。
+- **Conversation-first**：用户从企业会话自然提出任务，不必先理解 Agent 或工作流。
+- **Case-centered**：一个目标及其证据、协作、审批、产物和结果统一归属于 Case。
+- **Blackboard-assisted**：开放问题通过结构化共享状态逐步求解，而不是只靠消息摘要传递。
+- **Workflow-governed**：等待输入、审批、重试、恢复、发布等关键步骤由持久 Workflow 约束。
+- **Human-authorized**：风险接受、生产授权和重要决策不能由 Agent 自行获得。
+- **Authority-separated**：每类现实事实只有一个权威所有者，Accord 不复制其他系统的主权。
 
 ---
 
-## 2. 每个 Agent 独立 Skills，且采用渐进加载
-
-Cumora 的 Skill 设计非常值得直接借鉴：
+## 目标架构概览
 
 ```text
-skills/<name>/SKILL.md
-skills/<name>/references/*
-skills/<name>/scripts/*
-skills/<name>/assets/*
+┌──────────────────────────────────────────────┐
+│           MagicChat 企业协作与治理平面        │
+│  身份 / 组织 / 会话 / 文件 / App / 审批入口   │
+└──────────────────────┬───────────────────────┘
+                       │ reliable message/event
+┌──────────────────────▼───────────────────────┐
+│                 Accord                       │
+│                                              │
+│  Case Coordinator                            │
+│  Governed Case Blackboard                    │
+│  Deterministic Workflow Run                  │
+│  Agent Activation & Work Claim               │
+│  Response Claim / Freshness / Dedup           │
+│  Audit / Evaluation                          │
+└───────────────┬──────────────────┬───────────┘
+                │                  │
+       ┌────────▼────────┐  ┌──────▼─────────────┐
+       │ Agent Runtimes  │  │ Domain Authorities │
+       │ LLM / Pi / Codex│  │ Planner / Harness  │
+       │ optional runtime│  │ GitHub / Enterprise│
+       └─────────────────┘  └────────────────────┘
 ```
 
-基础上下文只放：
-
-```text
-skill name
-skill description
-```
-
-只有当任务真正需要时，Agent 才读取完整 Skill 内容，避免所有 Skill 一次性进入系统 Prompt。
-
-MagicChat 应建立：
-
-```text
-AgentSkillCatalog
-AgentSkillBinding
-SkillVersion
-SkillDigest
-SkillRiskLevel
-SkillAllowedTools
-SkillEvalSuite
-```
-
-但企业版本不要完全照搬 Cumora 的自主行为：
-
-```text
-第一阶段：
-管理员发布 Skill
-管理员绑定 Agent
-版本锁定
-按需读取
-
-暂不允许：
-Agent 自主安装 Skill
-Agent 自主修改 Skill
-Skill 隐式获取工具权限
-```
-
-Skill 是知识和执行说明，不是权限来源。
+详细愿景、逻辑边界和实施地图见 [`docs/product/VISION.md`](docs/product/VISION.md)。
 
 ---
 
-## 3. 借鉴 Inbox/Wake 模型，而不是让所有 Agent 监听所有消息
+## 系统职责
 
-Cumora 的 Agent 不是持续盯着整个消息流，而是在有新 Inbox 内容时收到 Wake-up，再自行判断是否需要行动。它还使用低成本模型进行 Inbox Triage，避免每次群聊活动都唤醒昂贵主模型。
+| 系统或层 | 主要职责 | 不应拥有 |
+|---|---|---|
+| MagicChat | 企业身份、组织、会话、消息、文件、App、审批入口 | Accord Case、交付执行事实 |
+| Accord | Case、受管黑板、Workflow Run、Agent 激活、Claim、响应控制、审计关联 | GitHub、Harness 或业务系统的真实状态 |
+| Agent Runtime | 调用模型、Skill 和工具，执行一个受约束的 Agent Activity | 用户授权、最终事实和外部执行结果 |
+| pi-ticket-planning | 产品规划、Release 形成、Delivery Spec 和 Ticket Admission | 代码执行和 Merge 结果 |
+| HerdrHarness-lite | Delivery Ticket 执行、Attempt、Reviewer、恢复和 Merge 控制 | 产品规划事实和通用会话状态 |
+| GitHub | Repository、Issue、PR、Commit、CI 和 Merge 状态 | Accord Workflow 状态 |
+| 企业业务系统 | 其业务对象、操作和结果 | Accord 内部推理状态 |
 
-MagicChat 当前如果增加多个 App Agent，最容易出现的问题是：
-
-```text
-用户在群里发一句话
-→ 茉莉醒
-→ Planner 醒
-→ Researcher 醒
-→ Delivery 醒
-→ 四个 Agent 同时回答
-```
-
-因此需要一个 `WakeRouter`：
-
-```ts
-interface WakeDecisionV1 {
-  eventId: string;
-  conversationId: string;
-  messageSeq: number;
-
-  targetAgentIds: string[];
-  responseOwnerId: string | null;
-
-  mode:
-    | "ignore"
-    | "observe"
-    | "reply"
-    | "continue-session"
-    | "decision-response";
-
-  reasonCode: string;
-}
-```
-
-路由规则优先级：
-
-```text
-1. Choice 回答 → 原 Challenge 所有者
-2. 明确 @Agent → 被提及 Agent
-3. App 私聊 → 当前 App
-4. 当前存在有效 Work Claim → Claim 所有者
-5. 当前存在等待回答的 Planner Session → Planner
-6. 能力路由 → 最匹配的一个 Agent
-7. 其他 Agent 只观察或忽略
-```
-
-**一条消息原则上只有一个 Response Owner。**
+Cumora、Cairn、Hermes 等项目是重要设计参考，但不是 Accord 必须依赖的事实权威。
 
 ---
 
-## 4. 借鉴 Cumora 的并发防碰撞，而不是只依赖 Prompt
+## 核心不变量
 
-Cumora 对多 Agent 协作的一个重要判断是：
-
-```text
-有些问题属于代码层并发碰撞
-有些问题属于模型判断错误
-两者不能只靠 Prompt 一起解决
-```
-
-它实现了：
-
-* Wake Debounce 和 Coalescing；
-* 同一 Agent 的并发限制；
-* Model 调用节流；
-* Adaptive Pacer；
-* 消息新鲜度检查；
-* 重复回复事务内拦截；
-* Seen Sequence；
-* 旧上下文输出 Hold。
-
-MagicChat 当前已有会话 Session、消息 Seq、排队和中断机制，但仍缺少完整的最终输出新鲜度 Gate。当前输出 Sink 主要确认 Session Job 仍有效，并未完整证明“模型生成答案时所依据的消息快照仍然是最新的”。
-
-应增加：
-
-```ts
-interface FreshnessTokenV1 {
-  conversationId: string;
-  triggerMessageId: string;
-  triggerSeq: number;
-  contextMaxSeq: number;
-  contextDigest: string;
-  claimId: string;
-  agentId: string;
-}
-```
-
-发送前校验：
-
-```text
-当前 Conversation Max Seq
-    == contextMaxSeq
-
-当前 Claim
-    仍属于该 Agent
-
-当前 Agent Session
-    仍是该 Session
-
-最后一条 Peer 输出
-    未与本次输出重复
-```
-
-不满足时：
-
-```text
-HOLD 输出
-→ 将新增消息追加到同一 Session
-→ 要求 Agent 重新判断
-→ 新结果再次通过 Gate 后发布
-```
-
-这是 Cumora 最值得移植的部分之一。
+1. **每类现实事实只有一个权威所有者。**
+2. **聊天不是任务状态、审批或执行结果的唯一事实源。**
+3. **Agent 输出默认是候选判断，不是已验证事实。**
+4. **Case Blackboard 是结构化问题求解状态，不是无限聊天记录或全局长期记忆。**
+5. **高风险操作必须经过确定性门禁和明确授权。**
+6. **一条用户可见消息原则上只有一个 `Response Owner`。**
+7. **副作用必须具备稳定身份、幂等、持久确认和恢复路径。**
+8. **外部系统状态只能被引用或投影，不能在 Accord 中形成第二个权威。**
+9. **愿景中的 Phase 和 Work Package 不是立即实施授权。**
+10. **局部 Ticket 不得以“符合愿景”为理由顺手建设通用平台。**
 
 ---
 
-## 5. 借鉴 Agent Session 的独立性
+## 当前状态
 
-Cumora 中每个 Agent 是独立 Engine Session。多个 Agent 不是共享同一份模型消息历史。
+### R001：受管 Agent 团队内部决策方案
 
-MagicChat 多 Agent 后，Session Key 不能继续只依赖：
+状态：`HOLD`
 
-```text
-conversation_id
-```
+R001 使用固定合成场景验证了以下逻辑：
 
-应该升级为：
+- 自然消息进入固定 Workflow；
+- 信息不足时追问；
+- 用户补充后恢复同一 Run；
+- Agent 节点和 Human Approval；
+- 单一 Response Owner；
+- 最终只发布一次。
 
-```text
-交互 Session：
-tenant_id + agent_id + conversation_id
+这些结果来自逻辑原型，不证明真实模型质量、真实员工采用率或生产安全。
 
-规划 Session：
-tenant_id + planner_agent_id + delivery_case_id
+参见：
 
-执行 Attempt：
-harness_job_id + lane + attempt_id
-```
+- [`docs/product/releases/r001-managed-internal-decision-brief.md`](docs/product/releases/r001-managed-internal-decision-brief.md)
+- [`docs/product/prototypes/r001-agent-coordination-state.logic-prototype.html`](docs/product/prototypes/r001-agent-coordination-state.logic-prototype.html)
+- [`docs/product/prototypes/r001-architecture-smoke.logic-prototype.html`](docs/product/prototypes/r001-architecture-smoke.logic-prototype.html)
 
-绝不能：
+### R002：非生产基础架构 Walking Skeleton
 
-```text
-Planner、Researcher、Delivery
-共享一个 Conversation Session
-```
+状态：`COMMITTED`
 
-否则会造成：
+R002 在真实官方 MagicChat App WebSocket 边界上验证了一个狭窄的非生产闭环，包括：
 
-* Persona 串线；
-* Skill 串线；
-* 授权串线；
-* Memory 污染；
-* 工具结果互相影响；
-* Reviewer 看到 Worker 的隐式上下文。
+- 稳定 Message ID/cursor 与可变化 Event ID 的区分；
+- 一个持久 Workflow Run；
+- 缺失信息追问和同一 Run 恢复；
+- 一个逻辑 Stub Runtime 结果；
+- 发起人审批；
+- 确定性消息回写；
+- `message.send` 成功后崩溃的重放恢复；
+- 最终只有一个 Run、一个逻辑结果和一条最终消息。
 
----
+R002 不证明真实 LLM 质量、真实企业数据安全、多副本生产运行或完整领域集成。
 
-## 6. 借鉴 Cumora 的 Agent-to-Agent 协作形式
+参见：
 
-Cumora 允许 Agent：
-
-* 私聊其他 Agent；
-* 创建临时 Agent Group；
-* 拉入特定成员；
-* 使用团队成员名册；
-* 在 Agent-only side room 中先完成内部讨论。
-
-这对 MagicChat 很适合，因为 MagicChat 本身已有：
-
-* App 身份；
-* 群聊；
-* Topic；
-* Group 创建；
-* App 之间的会话能力。
-
-但企业版应增加约束：
-
-```text
-Agent 可以发起：
-delegate
-consult
-request_review
-request_evidence
-
-Agent 不能通过聊天直接发起：
-approve
-activate
-resume
-mark_done
-force_merge
-```
-
-Agent 间正式交接使用：
-
-```ts
-interface AgentHandoffV1 {
-  id: string;
-  sourceAgentId: string;
-  targetAgentId: string;
-
-  kind:
-    | "consultation"
-    | "evidence-request"
-    | "candidate-review"
-    | "runtime-delegation";
-
-  objective: string;
-  contextRefs: string[];
-  artifactRefs: string[];
-  obligations: string[];
-  unknowns: string[];
-
-  sourceRevision: string;
-  digest: string;
-}
-```
-
-普通讨论可以在 Topic 中发生；真正的领域交接仍使用结构化 Handoff。
+- [`docs/product/releases/r002-non-production-architecture-walking-skeleton.md`](docs/product/releases/r002-non-production-architecture-walking-skeleton.md)
+- [`docs/adr/0001-r002-non-production-walking-skeleton-boundary.md`](docs/adr/0001-r002-non-production-walking-skeleton-boundary.md)
 
 ---
 
-## 7. 借鉴 Agent Memory Namespace，但不能让 Memory 成为事实
+## 尚未证明
 
-Cumora 每个 Agent 都有独立的：
+当前仓库没有证据证明：
 
-```text
-SOUL.md
-IDENTITY.md
-memory/
-skills/
-```
+- 真实 LLM 能稳定完成目标任务；
+- 多 Agent Blackboard 比固定 Workflow 更有产品价值；
+- 企业员工愿意迁移并持续使用；
+- 真实企业数据可以在完整威胁模型下安全处理；
+- 动态 Agent 激活能够提高质量或降低成本；
+- 多 Workflow、多 Runtime 和复杂分支能够可靠恢复；
+- Planner、Harness、GitHub 和企业系统已经形成完整生产闭环；
+- 当前架构能够满足生产级性能、可用性和多租户要求。
 
-并把这些内容与普通临时工作文件区分开。
-
-MagicChat 可借鉴为：
-
-```text
-Agent Identity
-Agent Private Memory
-Project Shared Memory
-Conversation Memory
-Domain Fact References
-```
-
-但企业版必须增加：
-
-```ts
-interface MemoryRecordV1 {
-  id: string;
-  agentId: string;
-  tenantId: string;
-  scope: "agent-private" | "project-shared";
-
-  type:
-    | "preference"
-    | "decision-reference"
-    | "working-note"
-    | "learned-procedure";
-
-  content: string;
-  sourceRefs: string[];
-  confidence: number;
-  expiresAt: string | null;
-  supersedes: string | null;
-}
-```
-
-约束：
-
-```text
-Memory 可以帮助 Agent 找信息
-Memory 不能覆盖 Git、GitHub、Harness、Release Artifact
-Memory 不能产生用户授权
-Memory 不能证明某个操作已完成
-```
+这些问题必须分别通过后续 Release 和可审查证据验证。
 
 ---
 
-# 四、Cumora 和 Hermes 的借鉴重点并不一样
+## 设计参考及其准确位置
 
-| 能力            | 优先借鉴 Cumora |          优先借鉴 Hermes |
-| ------------- | ----------: | -------------------: |
-| Agent 一等身份    |           是 |                  可参考 |
-| Persona 和团队名册 |           是 |                  可参考 |
-| Skills 渐进披露   |           是 |                    是 |
-| Inbox/Wake 语义 |           是 |                   次要 |
-| 消息 Claim      |           是 |     Kanban Claim 可参考 |
-| 输出新鲜度         |           是 |         不如 Cumora 完整 |
-| 重复回复拦截        |           是 |                   次要 |
-| Agent 群聊      |           是 | Desktop Bot Mode 可参考 |
-| 多 Agent 运行进程  |    可参考 BYOA |                    是 |
-| Profile 隔离    |         可参考 |                    是 |
-| 通用任务 Kanban   |          次要 |                    是 |
-| 企业身份、SSO、应用治理 |           否 |                    否 |
-| 正式软件交付状态      |           否 |                    否 |
+| 参考对象 | Accord 主要借鉴 | Accord 不直接继承 |
+|---|---|---|
+| MagicChat | 企业身份、会话、App、审批和治理入口 | Accord Case、Blackboard 和交付事实 |
+| Cumora | 一等 Agent、durable inbox、Wake/triage、Skill 渐进加载、Freshness | 广播所有 Agent、聊天即任务、通用 Workflow 假设 |
+| Blackboard Architecture / Cairn | 共享状态、部分解、动态探索、Intent Claim | 完全机会式调度、无治理共享区、无审批执行 |
+| Hermes | 可选 Runtime、Profile 和通用任务执行参考 | Accord 领域事实和正式交付控制 |
+| pi-ticket-planning | 产品规划与 Ticket Admission | 通用 Agent 协调 |
+| HerdrHarness-lite | 确定性交付、Reviewer、恢复和 Merge Gate | Case 与开放问题求解 |
 
-因此优先级应该是：
+Cumora 的实现核查见：
 
-```text
-企业平台：MagicChat
-
-Agent 协作内核：
-Cumora 优先
-
-通用 Runtime 和任务板：
-Hermes 可选
-
-领域引擎：
-pi-ticket-planning + HerdrHarness-lite
-```
+- [`docs/product/research/cumora-wake-and-first-class-agents.md`](docs/product/research/cumora-wake-and-first-class-agents.md)
 
 ---
 
-# 五、哪些 Cumora 能力不要直接搬
+## 仓库导航
 
-## 1. 不要让 Agent 自主安装和修改生产 Skill
-
-个人 Agent 可以这么做，企业产品不适合。
-
-## 2. 不要让聊天成为任务唯一事实
-
-Agent 群聊只能是协作界面，不能替代：
-
-```text
-GitHub Ticket
-Admission Envelope
-Harness Ledger
-Git HEAD
-Reviewer Result
-Approval Record
-```
-
-## 3. 不要第一阶段复制 Cumora 的全部主动行为
-
-暂时不做：
-
-```text
-长期 Idle Agenda
-主动拉群
-自动周期跟进
-自主创建大量任务
-自主技能学习
-```
-
-先把被动触发、Claim、新鲜度和权限做好。
-
-## 4. 不要直接复制 Cumora 的完整基础设施
-
-没有必要立即复制：
-
-* 每 Agent Pod；
-* FUSE Workspace；
-* 云端 BYOA Daemon；
-* 完整邮件、日历和看板体系；
-* 所有主动任务调度。
-
-MagicChat 已经有消息、身份、Topic 和 App 协议；只需要提取 Cumora 的协调契约。
+| 需要回答的问题 | 应读取的来源 |
+|---|---|
+| Accord 最终要成为什么 | [`docs/product/VISION.md`](docs/product/VISION.md) |
+| 当前 Release 承诺什么行为 | [`docs/product/releases/`](docs/product/releases/) |
+| 某项承重技术决策为什么这样选 | [`docs/adr/`](docs/adr/) |
+| AI 如何选择权威来源 | [`AGENTS.md`](AGENTS.md) |
+| Delivery Ticket 如何进入执行 | [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) |
+| Tracker、Label 和关系如何表达 | [`docs/agents/`](docs/agents/) |
+| 外部项目和技术路线的事实依据 | [`docs/product/research/`](docs/product/research/) |
+| 交互与状态原型 | [`docs/product/prototypes/`](docs/product/prototypes/) |
+| 试点、基线和评价模板 | [`docs/product/pilots/`](docs/product/pilots/) |
+| 当前实现实际上如何工作 | 当前代码、配置、类型和测试 |
 
 ---
 
-# 六、调整后的模块架构
+## 从愿景到实现
 
-建议新增独立服务：
-
-```text
-agent-hub/
-├── contracts/
-│   ├── agent-profile.ts
-│   ├── wake-event.ts
-│   ├── wake-decision.ts
-│   ├── claim.ts
-│   ├── freshness-token.ts
-│   ├── handoff.ts
-│   └── runtime-result.ts
-│
-├── profiles/
-│   ├── registry.ts
-│   ├── tool-policy.ts
-│   └── model-policy.ts
-│
-├── skills/
-│   ├── catalog.ts
-│   ├── binding.ts
-│   └── loader.ts
-│
-├── routing/
-│   ├── wake-router.ts
-│   ├── triage.ts
-│   └── response-owner.ts
-│
-├── sessions/
-│   ├── manager.ts
-│   ├── freshness.ts
-│   └── compaction.ts
-│
-├── coordination/
-│   ├── claim-store.ts
-│   ├── dedup.ts
-│   ├── delegation.ts
-│   └── side-room.ts
-│
-├── memory/
-│   ├── store.ts
-│   ├── retrieval.ts
-│   └── policy.ts
-│
-├── runtimes/
-│   ├── native-magicchat.ts
-│   ├── pi-ticket-plan.ts
-│   ├── herdr-harness.ts
-│   ├── hermes.ts
-│   └── codex.ts
-│
-└── observability/
-    ├── events.ts
-    ├── usage.ts
-    └── audit.ts
-```
-
-建议技术选择：
+Accord 的开发路径是：
 
 ```text
-MagicChat Server：
-继续 Go，不大改领域逻辑
-
-Agent Hub：
-TypeScript / Node.js
-
-原因：
-pi-ticket-planning 和 HerdrHarness-lite 都是 TypeScript
-协议和类型可以直接共享
-Pi RPC、Harness CLI、GitHub 集成更容易复用
+Product Vision
+    ↓
+Release Frame
+    ↓
+Evidence Protocol / Pilot
+    ↓
+Delivery Spec + Scenario IDs
+    ↓
+Candidate Tickets + Handoffs
+    ↓
+Admission Review
+    ↓
+Harness Execution
+    ↓
+Independent Verification
+    ↓
+Evidence-backed Release Decision
 ```
 
-Agent Hub 通过 MagicChat 的 App WebSocket 协议接入，不直接访问 MagicChat 内部数据库。
+`VISION.md` 中的 Phase 和 Work Package 只提供能力地图。它们必须先被缩小为一个有边界、有证据要求的 Release，才能继续拆成可执行 Ticket。
 
 ---
 
-# 七、需要区分三种 Claim
+## 实现语言与技术栈
 
-这是防止未来架构再次混乱的关键。
+根 README 不拥有生产实现语言、数据库、消息队列或部署形态。
 
-## 1. Message Claim
+- R002 已接受的 Go 实现只是非生产 Conformance Harness；
+- 生产 Coordination Plane 的语言必须由单独 Accepted ADR 决定；
+- Delivery Spec 和 Ticket 应引用 ADR，不应复制其理由；
+- 当前代码、锁文件和工具链配置拥有实际版本事实。
 
-```text
-谁负责回答这条消息
-```
+当前语言建议草案见：
 
-所有者：
+- [`docs/adr/0002-production-coordination-runtime-language.md`](docs/adr/0002-production-coordination-runtime-language.md)
 
-```text
-Agent Coordination Kernel
-```
-
-## 2. Generic Work Claim
-
-```text
-谁负责某项研究、分析或文档任务
-```
-
-所有者：
-
-```text
-Agent Coordination Kernel
-或可选 Hermes Kanban
-```
-
-## 3. Delivery Ticket Claim
-
-```text
-谁正在执行 GitHub Issue
-```
-
-所有者：
-
-```text
-HerdrHarness-lite
-```
-
-不能出现：
-
-```text
-Agent Hub 认为 Ticket 已领取
-Hermes Kanban 也认为已领取
-Harness Ledger 又认为已领取
-```
-
-正式开发 Ticket 的唯一 Claim 权威必须仍然是 Harness。
+在该 ADR 被接受前，任何任务不得假定生产 Agent Hub 已经选择 TypeScript、Go 或 Rust。
 
 ---
 
-# 八、需要区分三种 Handoff
+## 开发规则
 
-## 1. Agent 协作 Handoff
+开始任何实现前：
 
-```text
-Researcher → Architect
-Planner → Researcher
-```
-
-使用 Cumora 风格协作 Handoff。
-
-## 2. Planning → Delivery Handoff
-
-```text
-pi-ticket-planning → HerdrHarness
-```
-
-使用：
-
-```text
-Admission Plan
-Admission Envelope
-Harness Manifest
-Fingerprint
-```
-
-## 3. Delivery Attempt Handoff
-
-```text
-Reviewer → Worker
-Analyst → Fresh Worker
-```
-
-继续使用 HerdrHarness 的：
-
-```text
-TypedHandoff
-AttemptContextEnvelope
-ExecutionSnapshot
-```
-
-不应试图用一个万能 `handoff.json` 统一三者。
+1. 阅读根 [`AGENTS.md`](AGENTS.md)；
+2. 确认当前 Accepted Release、Delivery Spec 或 Ticket；
+3. 只读取会改变当前决策的 ADR 和愿景章节；
+4. 检查当前代码、配置、类型和测试；
+5. 明确当前任务影响的 Owner、Seam、Scenario 和外部副作用；
+6. 遇到权威冲突、权限缺失或未决定技术边界时停止扩大范围。
 
 ---
 
-# 九、交给 Codex 的优先实施顺序也要调整
+## 非目标
 
-## 第一阶段：Cumora Coordination Foundation
+当前阶段不应顺手建设：
 
-先实现：
+- 通用 Agent Marketplace；
+- Agent 自主安装或修改生产 Skill；
+- 无限长期 Memory；
+- 完全机会式多 Agent 自治；
+- 通用 Workflow DSL；
+- 通用 Event Bus；
+- 多云 Runtime 平台；
+- 自动生产变更；
+- MagicChat 核心 Fork；
+- 为未来假设提前设计的抽象层。
 
-```text
-AgentProfile
-AgentSkillBinding
-AgentRuntimePort
-Composite Session Key
-Message Claim
-Freshness Token
-Response Owner
-```
-
-验收：
-
-```text
-同一消息只允许一个 Agent 回复
-不同 Agent Session 不串线
-旧上下文输出会被 Hold
-Agent 只能看到自己绑定的工具和 Skill
-```
-
-## 第二阶段：Visible Agent Apps
-
-实现：
-
-```text
-茉莉 App
-Ticket Planner App
-Delivery App
-Researcher App
-```
-
-每个 App 绑定独立 AgentProfile 和 Runtime。
-
-## 第三阶段：pi-ticket-plan Runtime Adapter
-
-```text
-MagicChat 用户消息
-→ Planner Message Claim
-→ Case-scoped Pi RPC Session
-→ ask-yet
-→ PlannerTurnSubmission
-→ Freshness Gate
-→ Planner App 回复
-```
-
-## 第四阶段：HerdrHarness Adapter
-
-```text
-Harness Event
-→ Delivery App 状态投影
-
-OperatorAction
-→ Exact Decision Challenge
-→ 用户确认
-→ Harness CAS
-```
-
-## 第五阶段：Agent-to-Agent Collaboration
-
-实现：
-
-```text
-delegate
-consult
-request_evidence
-request_review
-agent-only Topic
-structured Handoff
-```
-
-## 第六阶段：Memory 和主动行为
-
-最后再实现：
-
-```text
-Agent Private Memory
-Project Shared Memory
-Idle Agenda
-Stall Nudge
-Synthetic Wake Gate
-```
+每项新增能力都必须有当前 Release、具体 Consumer、退出条件和验证方法。
 
 ---
 
-# 十、最终架构判断
+## 项目成熟度声明
 
-现在最准确的产品技术路线是：
+Accord 当前是一个以证据驱动方式形成中的产品和架构，不是已经完成的生产平台。
 
-```text
-MagicChat
-    提供企业可信入口
+仓库中的愿景、研究、Release、原型和 ADR 应帮助人和 AI：
 
-Cumora
-    提供多 Agent 协作内核设计
-
-Hermes
-    提供可选 Runtime、Profile 和通用 Kanban参考
-
-pi-ticket-planning
-    提供产品规划与 Ticket Admission
-
-HerdrHarness-lite
-    提供确定性软件交付控制
-```
-
-一句话概括：
-
-> **MagicChat 是企业外壳，Cumora 是 Agent 协作大脑，pi-ticket-plan 是产品规划专家，HerdrHarness-lite 是交付执行权威，Hermes 是可选执行环境。**
-
-Cumora 不是附加参考，而应该成为你设计 MagicChat 多 Agent 能力时的**第一参考对象**；尤其是 Agent Identity、Skills 渐进披露、Wake/Inbox、Message Claim、Freshness Gate 和并发防碰撞，这些应该在接入 pi-ticket-plan 和 HerdrHarness-lite 之前先建立。
-
+- 区分目标、事实、决定与假设；
+- 只读取完成当前任务所需的最小上下文；
+- 避免把外部参考误当成现成能力；
+- 避免把实验结果夸大为生产证明；
+- 按最小闭环逐步实现并验证 Accord。
