@@ -1,7 +1,7 @@
 # R003: Governed Case Blackboard Walking Skeleton
 
 ## Metadata
-- status: CANDIDATE
+- status: COMMITTED
 - revision: r1
 - owner: 产品负责人
 - product_stage: FRAME
@@ -101,3 +101,29 @@
 - scope_and_appetite: 仅执行 Release frame 中的一个 Case 和一个 Trace。
 - stop_condition: 达到全部最低证据，或触发任一安全/范围停止条件。
 - return_to: R003/r1 Evidence ledger 和 Readiness review。
+
+## Readiness
+
+- verdict: READY_TO_COMMIT
+- assessed_at: 2026-08-21
+- actor_trigger_and_current_workflow: PASS
+- current_alternative_and_important_failure: PASS
+- smallest_closed_loop: PASS
+- signal_guardrail_window_and_minimum_evidence: PASS
+- highest_risk_bounded_in_appetite: PASS
+- non_goals_false_positive_and_major_risks: PASS
+- reason: R003 is a bounded evidence-enabling Release whose actor, observable implementation gap, end-to-end loop, evidence threshold, controlled boundary and false-positive conditions are decision-complete.
+
+## Commitment
+
+- decision: COMMITTED
+- decided_by: 产品负责人
+- decided_at: 2026-08-21
+- committed_revision: R003/r1
+- approved_candidate_commit: `2cdd15d67e7990c4ed0bf579e122213bbf2b4852`
+- approved_candidate_blob: `565aaa35287984df6a861f0193d0a37998f5d8a0`
+- approved_candidate_sha256: `07a008becdf755b0e3cd1ee8c9f039dcf3984bf988c49485a97b3d3906377ca5`
+- commitment_scope: 确认一个合成、隔离、非生产的 Governed Case Blackboard Walking Skeleton 值得进入正式交付准备。
+- authorization_effect: 只授权记录并接受本 Release，以及开展 Commitment 后的 Solution Shaping；不授权 Spec、Ticket、代码、模型凭据、Pilot 执行或生产启用。
+- retained_boundaries: 保留一个 Case、一个 Workflow、一个 Typed Blackboard、四个非预置模型 Profile、一个 Human Approval、一个 Response Owner、一个 Artifact、一个 Trace 和全部受控非生产边界。
+- next_gate: 将本精确 COMMITTED blob 合入 accepted base；随后先解决适用的模型/Runtime、持久化、生产语言、权限和验证边界，再决定是否进入 Spec。
