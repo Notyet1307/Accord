@@ -1,0 +1,21 @@
+# pi-ticket-planning:delivery-gate:v1 validation-script=scripts/validate-delivery.sh
+name: Herdr delivery gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  herdr-delivery-gate:
+    name: herdr-delivery-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify
+        run: ./scripts/validate-delivery.sh
