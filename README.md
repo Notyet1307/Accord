@@ -266,15 +266,15 @@ Evidence-backed Release Decision
 根 README 不拥有生产实现语言、数据库、消息队列或部署形态。
 
 - R002/r2 的 Go 实现只作为已 HOLD Release 的历史非生产 Conformance 证据；
-- 生产 Coordination Plane 的语言必须由单独 Accepted ADR 决定；
+- 生产 Coordination Plane 的主要语言由 Accepted ADR-0002 决定；
+- R003/r1 的首个最小实现边界由 Accepted ADR-0003 决定；
 - Delivery Spec 和 Ticket 应引用 ADR，不应复制其理由；
 - 当前代码、锁文件和工具链配置拥有实际版本事实。
 
-当前语言建议草案见：
+参见：
 
 - [`docs/adr/0002-production-coordination-runtime-language.md`](docs/adr/0002-production-coordination-runtime-language.md)
-
-在该 ADR 被接受前，任何任务不得假定生产 Agent Hub 已经选择 TypeScript、Go 或 Rust。
+- [`docs/adr/0003-r003-governed-case-blackboard-boundary.md`](docs/adr/0003-r003-governed-case-blackboard-boundary.md)
 
 ---
 

@@ -1,17 +1,20 @@
 # ADR-0002：Accord 生产协调平面的实现语言
 
-- **Status**: PROPOSED
+- **Status**: ACCEPTED
 - **Date**: 2026-08-21
+- **Accepted**: 2026-08-22
 - **Decision owner**: 产品负责人
+- **Source Release**: R003/r1
+- **Decision base**: `ebd63badccde37c944f01c0ce92169350778dfbc`
 - **Applies to**: Accord 生产 Coordination Plane
-- **Recommended path**: `docs/adr/0002-production-coordination-runtime-language.md`
+- **Path**: `docs/adr/0002-production-coordination-runtime-language.md`
 - **Supersedes**: 无
 - **Related**:
   - `docs/product/VISION.md`
   - `docs/adr/0001-r002-non-production-walking-skeleton-boundary.md`
   - `docs/product/research/cumora-wake-and-first-class-agents.md`
 
-> 将本文状态改为 `ACCEPTED` 之前，它只是推荐方案，不是实现授权。  
+> 本文是 Accord 生产 Coordination Plane 主要实现语言的权威决定，但不单独授权实现、部署或生产启用。
 > README、VISION、Release、Delivery Spec 和 Ticket 不应复制本文的完整理由。
 
 ---
@@ -44,7 +47,7 @@ Accord 的生产协调平面应以 TypeScript/Node.js、Go 还是 Rust 为主要
 
 ---
 
-## 2. 推荐决策
+## 2. 决策
 
 选择：
 
@@ -53,7 +56,7 @@ Accord 的生产协调平面应以 TypeScript/Node.js、Go 还是 Rust 为主要
 同时保留以下边界：
 
 1. **R002 仅保留为历史证据**
-   R002/r3 已进入 HOLD。ADR-0001、Go Reference Harness 的既有结果和故障语义只作为 R002 范围内的历史证据；本提案只继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束，不授权继续交付或重写 R002 Harness。
+   R002/r3 已进入 HOLD。ADR-0001、Go Reference Harness 的既有结果和故障语义只作为 R002 范围内的历史证据；本 ADR 只继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束，不授权继续交付或重写 R002 Harness。
 
 2. **MagicChat 保持外部 Go 系统**  
    Accord 通过官方 App WebSocket/API 集成，不为统一语言而 Fork 或直接访问 MagicChat 数据库。
@@ -328,7 +331,7 @@ packages/
 └── testkit/
 ```
 
-逻辑模块可以有独立 Owner 和 Contract，但第一阶段共享一个部署单元和同一事务边界。外部行为 Conformance 的实现、位置和语言由后续已承诺 Release 决定；本提案不继承 `conformance/r002-go` 作为生产布局。
+逻辑模块可以有独立 Owner 和 Contract，但第一阶段共享一个部署单元和同一事务边界。外部行为 Conformance 的实现、位置和语言由后续已承诺 Release 决定；本 ADR 不继承 `conformance/r002-go` 作为生产布局。
 
 ---
 
@@ -336,7 +339,7 @@ packages/
 
 ADR-0001 仅规定 R002 范围内的非生产边界；R002/r3 已进入 HOLD。其 Release、ADR、Go Reference Harness 既有结果和故障证据继续保留，但不构成本 ADR 的生产架构输入。
 
-本 ADR 若接受：
+本 ADR 接受后：
 
 - 只继承 stable identity、wait/resume、Human Approval、Response Claim、deterministic idempotency、Freshness、Dedup、crash recovery 和 audit 等外部行为约束；
 - 不要求保留、运行、重写或交付 R002 Go Harness；
@@ -426,13 +429,14 @@ VISION 不应因为本 ADR 接受而变成技术栈文档。
 
 ---
 
-## 12. 接受本 ADR 后的最小动作
+## 12. Acceptance record
 
-1. 将 `Status` 改为 `ACCEPTED`；
-2. 在根 README 的技术栈段落链接本 ADR；
-3. 保持 `VISION.md` 技术中立；
-4. 保留 ADR-0001 作为 R002-only 历史决定，不推广其 Go Harness、Atomic JSON Store 或内部模块划分；
-5. 为第一个 TypeScript Production Walking Skeleton 创建独立 Release；
-6. 先验证一个模块化单体，不提前拆微服务；
-7. 由后续已承诺 Release 决定是否以及如何建立跨语言 Conformance Test；
-8. 在代码产生前固定 Contract、Idempotency 和 Recovery 验收标准。
+- decision: ACCEPTED
+- decided_by: 产品负责人
+- accepted_at: 2026-08-22
+- source_release: R003/r1
+- decision_base: `ebd63badccde37c944f01c0ce92169350778dfbc`
+- first_consumer: R003 Governed Case Blackboard Walking Skeleton
+- scope: TypeScript + Node.js Active LTS 是 Accord 生产 Coordination Plane 的主要实现语言；跨进程协议继续使用语言无关、版本化并经运行时验证的契约。
+- implementation_authorization: 本 ADR 不授权 Spec、Ticket、代码、模型凭据、Pilot 或生产启用。
+- related_solution_adr: ADR-0003 固定 R003/r1 的首个最小实现边界。
