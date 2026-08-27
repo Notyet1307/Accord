@@ -3,3 +3,9 @@
 .env
 .env.*
 !.env.example
+node_modules/
+dist/
+coverage/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

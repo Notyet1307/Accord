@@ -1,0 +1,44 @@
+{
+  "handoffVersion": "accord.r003-core-handoff/v1",
+  "normalizedIntakeContract": "accord.normalized-synthetic-intake/v1",
+  "contractVersions": {
+    "approval": "accord.approval/v1",
+    "auditEvent": "accord.audit-event/v1",
+    "board": "accord.board/v1",
+    "boardEntry": "accord.board-entry/v1",
+    "case": "accord.case/v1",
+    "inboxDelivery": "accord.inbox-delivery/v1",
+    "inboxReceipt": "accord.inbox-receipt/v1",
+    "pendingSideEffect": "accord.pending-side-effect/v1",
+    "responseClaim": "accord.response-claim/v1",
+    "runtimeInvocation": "accord.runtime-invocation/v1",
+    "workflowRun": "accord.workflow-run/v1"
+  },
+  "databaseSchemaVersion": 1,
+  "migration": {
+    "id": "001_r003_authority_core",
+    "file": "migrations/001_r003_authority_core.sql",
+    "sha256": "5bc684c4613fc5c8bb1abf4ec2fdd0f3d717fb0ea4b5e8b62771867d440e9cbe",
+    "schemaFingerprint": "943d8f01887669ea34c79d5b4931c0b258ad878198e3a879820e0da915641ddd"
+  },
+  "fixedWorkflowDefinition": "r003-fixed/v1",
+  "transactionAuthority": [
+    "cases",
+    "boards",
+    "workflow_runs",
+    "inbox_receipts",
+    "inbox_deliveries",
+    "board_entries",
+    "runtime_invocations",
+    "approvals",
+    "response_claims",
+    "pending_side_effects",
+    "audit_events"
+  ],
+  "sqlitePragmas": {
+    "journalMode": "wal",
+    "foreignKeys": true,
+    "synchronous": "full",
+    "busyTimeoutMs": 5000
+  }
+}

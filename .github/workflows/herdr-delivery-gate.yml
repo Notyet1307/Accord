@@ -1,4 +1,6 @@
-# pi-ticket-planning:delivery-gate:v1 validation-script=scripts/validate-delivery.sh
+# pi-ticket-planning:delivery-gate:v1 validation-script=scripts/validate-ci.sh
+# This workflow is non-qualification CI and cannot produce staged-rollout evidence.
+# R003 local-only qualification remains exclusively behind the trusted pre-shell boundary.
 name: Herdr delivery gate
 
 on:
@@ -17,5 +19,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install pinned dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify
-        run: ./scripts/validate-delivery.sh
+        run: ./scripts/validate-ci.sh

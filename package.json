@@ -1,0 +1,36 @@
+{
+  "name": "@accord/r003-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.19.0",
+    "npm": "11.17.0"
+  },
+  "packageManager": "npm@11.17.0",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./r003-core-handoff": "./contracts/r003-core-handoff.json"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test:contract": "node --test dist/test/contracts.test.js",
+    "test:integration": "node --test dist/test/sqlite-startup.integration.test.js",
+    "test:conformance": "node --test dist/test/synthetic-intake.conformance.test.js",
+    "test": "npm run test:contract && npm run test:integration && npm run test:conformance",
+    "check:no-external-seams": "node scripts/check-no-external-seams.mjs",
+    "handoff": "node dist/src/handoff.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "6.0.3"
+  },
+  "optionalDependencies": {
+    "node-bin-darwin-arm64": "24.19.0"
+  }
+}

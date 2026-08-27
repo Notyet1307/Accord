@@ -8,6 +8,45 @@ Accord 让企业员工通过自然语言提出复杂目标，由受管 Agent 团
 > **当前阶段：产品与架构证据阶段。**  
 > 本仓库尚不是可用于生产的完整平台。现有 Release、原型和 ADR 用于逐步验证产品假设、系统边界、幂等恢复和可信交付路径。
 
+## R003 executable authority core
+
+The first R003 delivery slice is a single-process TypeScript modular core with
+one Accord-owned SQLite database. The exact Node.js, npm, TypeScript, contract,
+migration, and SQLite settings are pinned in the root toolchain files and in
+[`contracts/r003-core-handoff.json`](contracts/r003-core-handoff.json).
+
+The repository-owned canonical entry remains:
+
+```sh
+./scripts/validate-delivery.sh
+```
+
+For the R003 local-only staged qualification, an operator-owned launcher must
+establish its no-network, secret-minimized filesystem boundary before this
+repository shell is interpreted. The launcher supplies the boundary marker,
+private `TMPDIR`, and read-only offline npm cache; direct invocation fails
+closed. Launcher/profile hash verification and the `BOUNDARY` attestation are
+Controller receipt evidence, not authority implemented by repository code.
+The checked-in GitHub Actions workflow does not provide that trusted pre-shell
+boundary and is explicitly outside this local-only qualification.
+
+GitHub Actions instead calls `./scripts/validate-ci.sh`, a non-qualification
+entrypoint that refuses the operator boundary marker. After the workflow installs
+the pinned lockfile, this entrypoint runs the static seam inventory, typecheck,
+build, contract, SQLite integration, runtime-capability, and conformance suites.
+Its result is CI evidence only and cannot replace the trusted local qualification.
+
+The trusted local gate installs only the exact lockfile artifacts from the
+configured offline cache, then typechecks, builds, and runs deterministic contract
+and SQLite tests inside a secret-minimized, filesystem-restricted pinned-Node
+capability boundary.
+Network modules and globals remain unavailable at runtime, and executable bypass
+regressions cover computed imports, bracketed environment access, and denied-file
+reads. The gate emits the versioned `HANDOFF` line consumed by the next R003 ingress
+ticket. These synthetic checks prove only local contract, migration, transaction,
+replay, and recovery behavior;
+they are not the R003 real MagicChat/model evidence window.
+
 ---
 
 ## Accord 要解决什么问题
