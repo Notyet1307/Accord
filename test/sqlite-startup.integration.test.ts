@@ -7,9 +7,25 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { DATABASE_SCHEMA_VERSION, MIGRATION_FILE, SQLITE_PRAGMAS } from "../src/contracts/versions.js";
+import { MIGRATION_SCHEMA_FINGERPRINT, MIGRATION_SHA256 } from "../src/contracts/handoff.js";
+import {
+  CORE_DATABASE_SCHEMA_VERSION,
+  DATABASE_SCHEMA_VERSION,
+  MIGRATION_FILE,
+  MIGRATION_ID,
+  SQLITE_PRAGMAS,
+} from "../src/contracts/versions.js";
+import { MagicChatProtocolAdapter } from "../src/magicchat/adapter.js";
+import { DeterministicMagicChatSimulator } from "../src/magicchat/simulator.js";
 import { AuthorityStartupError, openAuthorityDatabase } from "../src/persistence/sqlite-authority.js";
-import { SYNTHETIC_INTAKE, temporaryDatabase } from "./fixture.js";
+import {
+  MAGICCHAT_MESSAGE_CREATED_ENVELOPE,
+  SYNTHETIC_INTAKE,
+  magicChatAckSuccessResponse,
+  magicChatMessageCreatedEnvelope,
+  magicChatMessageSendSuccessResponse,
+  temporaryDatabase,
+} from "./fixture.js";
 
 const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_audit_events_correlation",
@@ -17,8 +33,12 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_board_entries_case_revision",
   "index:idx_inbox_deliveries_receipt",
   "index:idx_inbox_receipts_case",
+  "index:idx_magicchat_inbox_app_cursor",
+  "index:idx_magicchat_rpc_request",
   "index:idx_pending_side_effects_state",
   "index:idx_runtime_invocations_run_status",
+  "index:idx_wait_challenges_active_app",
+  "index:idx_wait_challenges_run_version",
   "table:accord_schema_migrations",
   "table:approvals",
   "table:audit_events",
@@ -27,15 +47,20 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "table:cases",
   "table:inbox_deliveries",
   "table:inbox_receipts",
+  "table:magicchat_inbox_states",
+  "table:magicchat_messages",
+  "table:magicchat_rpc_actions",
   "table:pending_side_effects",
   "table:response_claims",
   "table:runtime_invocations",
+  "table:wait_challenges",
   "table:workflow_definitions",
   "table:workflow_runs",
   "trigger:inbox_deliveries_immutable_collision",
   "trigger:inbox_deliveries_immutable_delete",
   "trigger:inbox_deliveries_immutable_update",
 ] as const;
+const repositoryRoot = new URL("../../", import.meta.url);
 
 function schemaObjectIdentities(path: string): readonly string[] {
   const database = new DatabaseSync(path);
@@ -99,13 +124,238 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
       unknown
     >;
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
-    assert.equal(migrationCount["count"], 1);
+    assert.equal(migrationCount["count"], 2);
     raw.close();
 
     const reopened = openAuthorityDatabase(temporary.path);
     assert.deepEqual(reopened.readPragmas(), SQLITE_PRAGMAS);
     reopened.close();
     assert.deepEqual(schemaObjectIdentities(temporary.path), EXPECTED_SCHEMA_OBJECT_IDENTITIES);
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup upgrades an exact Issue 10 authority database through the additive ingress migration", () => {
+  const temporary = temporaryDatabase("issue-10-upgrade");
+  try {
+    const issue10 = new DatabaseSync(temporary.path);
+    issue10.exec(fs.readFileSync(new URL(MIGRATION_FILE, repositoryRoot), "utf8"));
+    issue10
+      .prepare(
+        `INSERT INTO accord_schema_migrations (
+           version, migration_id, migration_sha256, schema_fingerprint, applied_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        CORE_DATABASE_SCHEMA_VERSION,
+        MIGRATION_ID,
+        MIGRATION_SHA256,
+        MIGRATION_SCHEMA_FINGERPRINT,
+        "2026-08-26T00:00:00.000Z",
+      );
+    issue10.exec(`PRAGMA user_version = ${CORE_DATABASE_SCHEMA_VERSION}`);
+    issue10.close();
+
+    const upgraded = openAuthorityDatabase(temporary.path);
+    upgraded.close();
+
+    const inspected = new DatabaseSync(temporary.path);
+    const versions = inspected
+      .prepare("SELECT version, migration_id FROM accord_schema_migrations ORDER BY version")
+      .all()
+      .map((value) => {
+        const row = value as Record<string, unknown>;
+        return { migration_id: row["migration_id"], version: row["version"] };
+      });
+    const userVersion = inspected.prepare("PRAGMA user_version").get() as Record<string, unknown>;
+    inspected.close();
+    assert.deepEqual(versions, [
+      { version: 1, migration_id: "001_r003_authority_core" },
+      { version: 2, migration_id: "002_r003_magicchat_ingress" },
+    ]);
+    assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup preserves MagicChat receipt inspection after the downstream same-Run handoff advances", () => {
+  const temporary = temporaryDatabase("downstream-workflow-compatibility");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    const waiting = protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    assert.ok(waiting.nextRequest);
+    protocol.receive(
+      magicChatAckSuccessResponse(waiting.nextRequest.id, 1),
+      "2026-08-26T00:00:04.000Z",
+    );
+    const researcher = protocol.receive(
+      magicChatMessageCreatedEnvelope({
+        body: "Preserve a two-week decision window.",
+        cursor: 2,
+        envelopeEventId: "event-matching-reply",
+        messageCreatedAt: "2026-08-26T00:01:00Z",
+        messageId: "message-matching-reply",
+        messageSequence: 3,
+        replyToMessageId: "clarification-message-1",
+      }),
+      "2026-08-26T00:01:01.000Z",
+    );
+    assert.ok(researcher.nextRequest);
+    protocol.receive(
+      magicChatAckSuccessResponse(researcher.nextRequest.id, 2),
+      "2026-08-26T00:01:02.000Z",
+    );
+    authority.close();
+
+    const downstream = new DatabaseSync(temporary.path);
+    downstream
+      .prepare("UPDATE workflow_runs SET state = 'ANALYST', revision = 4 WHERE state = 'RESEARCHER' AND revision = 3")
+      .run();
+    downstream.close();
+
+    const reopened = openAuthorityDatabase(temporary.path);
+    const inspected = new MagicChatProtocolAdapter(reopened, "synthetic-app").inspect(2);
+    assert.ok(inspected);
+    assert.equal(inspected.workflowRunId, created.snapshot.workflowRunId);
+    assert.equal(inspected.workflowState, "ANALYST");
+    assert.equal(inspected.workflowRevision, 4);
+    reopened.close();
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup recovers an ACK_INTENT after remote acceptance without replaying the deleted event", () => {
+  const temporary = temporaryDatabase("accepted-ack-reconnect");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const simulator = new DeterministicMagicChatSimulator({ appId: "synthetic-app", firstMessageSequence: 2 });
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    const waiting = protocol.receive(
+      simulator.respond(created.nextRequest, "2026-08-26T00:00:02.000Z"),
+      "2026-08-26T00:00:03.000Z",
+    );
+    assert.equal(waiting.snapshot.ackState, "ACK_INTENT");
+    assert.ok(waiting.nextRequest);
+
+    const acceptedAckResponse = simulator.respond(waiting.nextRequest, "2026-08-26T00:00:04.000Z");
+    assert.deepEqual(simulator.acknowledgedCursors, [1]);
+    authority.close();
+
+    const reopenedAuthority = openAuthorityDatabase(temporary.path);
+    const reopenedProtocol = new MagicChatProtocolAdapter(reopenedAuthority, "synthetic-app");
+    const recovered = reopenedProtocol.pendingRequests();
+    assert.deepEqual(recovered, [{ cursor: 1, request: waiting.nextRequest }]);
+
+    const reconciledAckResponse = simulator.respond(recovered[0]!.request!, "2026-08-26T00:00:05.000Z");
+    assert.deepEqual(reconciledAckResponse, acceptedAckResponse);
+    const acknowledged = reopenedProtocol.receive(reconciledAckResponse, "2026-08-26T00:00:06.000Z");
+    assert.equal(acknowledged.snapshot.ackState, "ACK_CONFIRMED");
+
+    const next = reopenedProtocol.receive(
+      magicChatMessageCreatedEnvelope({
+        body: "Preserve a two-week decision window.",
+        cursor: 2,
+        envelopeEventId: "event-after-accepted-ack",
+        messageCreatedAt: "2026-08-26T00:01:00Z",
+        messageId: "message-after-accepted-ack",
+        messageSequence: 3,
+        replyToMessageId: waiting.snapshot.challenge.clarificationMessageId!,
+      }),
+      "2026-08-26T00:01:01.000Z",
+    );
+    assert.equal(next.snapshot.workflowState, "RESEARCHER");
+    reopenedAuthority.close();
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a downstream node while the actor-bound clarification challenge is still active", () => {
+  const temporary = temporaryDatabase("active-challenge-downstream-bypass");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    const waiting = protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    assert.ok(waiting.nextRequest);
+    protocol.receive(
+      magicChatAckSuccessResponse(waiting.nextRequest.id, 1),
+      "2026-08-26T00:00:04.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered
+      .prepare("UPDATE workflow_runs SET state = 'ANALYST', revision = 3 WHERE state = 'WAIT_FOR_INPUT'")
+      .run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /active clarification challenge cannot coexist/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup recomputes whether a matching clarification reply was expired", () => {
+  const temporary = temporaryDatabase("tampered-expired-reply-outcome");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    const waiting = protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    assert.ok(waiting.nextRequest);
+    protocol.receive(
+      magicChatAckSuccessResponse(waiting.nextRequest.id, 1),
+      "2026-08-26T00:00:04.000Z",
+    );
+    protocol.receive(
+      magicChatMessageCreatedEnvelope({
+        body: "This answer arrived after the challenge expired.",
+        cursor: 2,
+        envelopeEventId: "event-expired-reply",
+        messageCreatedAt: "2026-08-27T00:00:02Z",
+        messageId: "message-expired-reply",
+        messageSequence: 3,
+        replyToMessageId: "clarification-message-1",
+      }),
+      "2026-08-27T00:00:03.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered
+      .prepare("UPDATE magicchat_inbox_states SET business_outcome = 'UNMATCHED_INPUT' WHERE cursor = 2")
+      .run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /reply business outcome does not match/u.test(error.message),
+    );
   } finally {
     temporary.cleanup();
   }
@@ -240,11 +490,11 @@ test("startup refuses unsupported and drifted schemas", () => {
     const first = openAuthorityDatabase(versioned.path);
     first.close();
     const future = new DatabaseSync(versioned.path);
-    future.exec("PRAGMA user_version = 2");
+    future.exec("PRAGMA user_version = 3");
     future.close();
     assert.throws(
       () => openAuthorityDatabase(versioned.path),
-      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 2/u.test(error.message),
+      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 3/u.test(error.message),
     );
 
     const second = openAuthorityDatabase(drifted.path);
@@ -436,6 +686,231 @@ test("startup recomputes persisted contract digests and stable identity", () => 
       () => openAuthorityDatabase(temporary.path),
       (error: unknown) =>
         error instanceof AuthorityStartupError && /payload digest does not match the normalized intake fields/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a tampered durable MagicChat request instead of replaying changed visible-message intent", () => {
+  const temporary = temporaryDatabase("tampered-magicchat-request");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    new MagicChatProtocolAdapter(authority, "synthetic-app").receive(
+      MAGICCHAT_MESSAGE_CREATED_ENVELOPE,
+      "2026-08-26T00:00:01.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered
+      .prepare("UPDATE magicchat_rpc_actions SET request_json = ? WHERE rpc_method = 'message.send'")
+      .run(
+        JSON.stringify({
+          v: 1,
+          id: `request_${"0".repeat(64)}`,
+          kind: "request",
+          method: "message.send",
+          payload: {
+            target: { type: "conversation", conversation_id: "conversation-1" },
+            message: { type: "text", content: "Tampered visible message intent" },
+          },
+        }),
+      );
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /persisted clarification request/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup recomputes the deterministic clarification Question metadata", () => {
+  const temporary = temporaryDatabase("tampered-clarification-question");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    new MagicChatProtocolAdapter(authority, "synthetic-app").receive(
+      MAGICCHAT_MESSAGE_CREATED_ENVELOPE,
+      "2026-08-26T00:00:01.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered
+      .prepare("UPDATE board_entries SET content_digest = ? WHERE entry_type = 'Question'")
+      .run("0".repeat(64));
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /clarification Question metadata is invalid/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a stable wait whose confirmed clarification message record is missing", () => {
+  const temporary = temporaryDatabase("missing-clarification-message-record");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered.prepare("DELETE FROM magicchat_messages WHERE purpose = 'CLARIFICATION'").run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /confirmed clarification message record is invalid/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a RESEARCHER handoff whose matching clarification Observation is missing", () => {
+  const temporary = temporaryDatabase("missing-clarification-observation");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    const waiting = protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    assert.ok(waiting.nextRequest);
+    protocol.receive(
+      magicChatAckSuccessResponse(waiting.nextRequest.id, 1),
+      "2026-08-26T00:00:04.000Z",
+    );
+    protocol.receive(
+      magicChatMessageCreatedEnvelope({
+        body: "Preserve a two-week decision window.",
+        cursor: 2,
+        envelopeEventId: "event-matching-reply",
+        messageCreatedAt: "2026-08-26T00:01:00Z",
+        messageId: "message-matching-reply",
+        messageSequence: 3,
+        replyToMessageId: "clarification-message-1",
+      }),
+      "2026-08-26T00:01:01.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered.prepare("DELETE FROM board_entries WHERE entry_type = 'Observation'").run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /matching clarification Observation is invalid/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a tampered cumulative ACK request identity", () => {
+  const temporary = temporaryDatabase("tampered-magicchat-ack-request");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    const row = tampered
+      .prepare("SELECT request_json FROM magicchat_rpc_actions WHERE rpc_method = 'events.ack'")
+      .get() as Record<string, unknown>;
+    const request = JSON.parse(String(row["request_json"])) as Record<string, unknown>;
+    request["id"] = `request_${"0".repeat(64)}`;
+    tampered
+      .prepare("UPDATE magicchat_rpc_actions SET request_json = ? WHERE rpc_method = 'events.ack'")
+      .run(JSON.stringify(request));
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /persisted ACK request identity or digest is invalid/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a stable MagicChat receipt whose durable ACK intent was erased", () => {
+  const temporary = temporaryDatabase("missing-magicchat-ack-intent");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+    const created = protocol.receive(MAGICCHAT_MESSAGE_CREATED_ENVELOPE, "2026-08-26T00:00:01.000Z");
+    assert.ok(created.nextRequest);
+    protocol.receive(
+      magicChatMessageSendSuccessResponse(created.nextRequest.id),
+      "2026-08-26T00:00:03.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered
+      .prepare(
+        `UPDATE magicchat_inbox_states
+         SET ack_state = 'NONE', ack_action_id = NULL
+         WHERE cursor = 1`,
+      )
+      .run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /stable MagicChat protocol state requires a durable ACK/u.test(error.message),
+    );
+  } finally {
+    temporary.cleanup();
+  }
+});
+
+test("startup refuses a challenge whose expected actor no longer matches its source receipt", () => {
+  const temporary = temporaryDatabase("tampered-magicchat-challenge-actor");
+  try {
+    const authority = openAuthorityDatabase(temporary.path);
+    new MagicChatProtocolAdapter(authority, "synthetic-app").receive(
+      MAGICCHAT_MESSAGE_CREATED_ENVELOPE,
+      "2026-08-26T00:00:01.000Z",
+    );
+    authority.close();
+
+    const tampered = new DatabaseSync(temporary.path);
+    tampered.prepare("UPDATE wait_challenges SET expected_actor_id = 'actor-attacker'").run();
+    tampered.close();
+
+    assert.throws(
+      () => openAuthorityDatabase(temporary.path),
+      (error: unknown) =>
+        error instanceof AuthorityStartupError && /challenge binding does not match its source receipt/u.test(error.message),
     );
   } finally {
     temporary.cleanup();

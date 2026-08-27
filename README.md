@@ -8,11 +8,15 @@ Accord 让企业员工通过自然语言提出复杂目标，由受管 Agent 团
 > **当前阶段：产品与架构证据阶段。**  
 > 本仓库尚不是可用于生产的完整平台。现有 Release、原型和 ADR 用于逐步验证产品假设、系统边界、幂等恢复和可信交付路径。
 
-## R003 executable authority core
+## R003 executable authority and MagicChat ingress
 
-The first R003 delivery slice is a single-process TypeScript modular core with
-one Accord-owned SQLite database. The exact Node.js, npm, TypeScript, contract,
-migration, and SQLite settings are pinned in the root toolchain files and in
+R003 uses a single-process TypeScript modular core with one Accord-owned SQLite
+database. Its second delivery slice adds an official-shaped MagicChat App
+WebSocket adapter, serial durable Inbox/cumulative-ACK protocol, and deterministic
+clarification wait/resume boundary. Exact contract, migration, and downstream
+`RESEARCHER` handoff facts are pinned in
+[`contracts/r003-magicchat-handoff.json`](contracts/r003-magicchat-handoff.json);
+the unchanged Issue #10 prerequisite remains in
 [`contracts/r003-core-handoff.json`](contracts/r003-core-handoff.json).
 
 The repository-owned canonical entry remains:
@@ -42,10 +46,11 @@ and SQLite tests inside a secret-minimized, filesystem-restricted pinned-Node
 capability boundary.
 Network modules and globals remain unavailable at runtime, and executable bypass
 regressions cover computed imports, bracketed environment access, and denied-file
-reads. The gate emits the versioned `HANDOFF` line consumed by the next R003 ingress
-ticket. These synthetic checks prove only local contract, migration, transaction,
-replay, and recovery behavior;
-they are not the R003 real MagicChat/model evidence window.
+reads. The gate emits the versioned MagicChat `HANDOFF` line consumed by Issue #12.
+The protocol suite uses only an in-memory deterministic simulator: it proves
+local adapter shape, migration, transaction, replay, clarification, ACK ordering,
+and same-Run resume behavior. It does not create a real MagicChat resource or
+claim that R003 scenarios S1/S2 passed on the primary seam.
 
 ---
 
