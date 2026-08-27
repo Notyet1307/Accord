@@ -5,24 +5,40 @@ import { DatabaseSync } from "node:sqlite";
 
 import { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "../contracts/intake.js";
 import {
+  normalizeMagicChatEnvelope,
+  parseCanonicalInstant,
+  parseMagicChatInstant,
+  type NormalizedMagicChatMessageCreated,
+} from "../contracts/magicchat.js";
+import {
   CONTRACT_VERSIONS,
+  CORE_TRANSACTION_AUTHORITY_TABLES,
   DATABASE_SCHEMA_VERSION,
   FIXED_WORKFLOW_DEFINITION,
   FIXED_WORKFLOW_DEFINITION_ID,
   MIGRATION_ID,
   NORMALIZED_INTAKE_CONTRACT,
   SQLITE_PRAGMAS,
-  TRANSACTION_AUTHORITY_TABLES,
 } from "../contracts/versions.js";
 import {
   deriveInboxDeliveryId,
+  deriveAckBusinessIds,
+  deriveClarificationBusinessIds,
   deriveIntakeBusinessIds,
+  deriveMagicChatMessageRecordId,
+  deriveObservationEntryId,
+  deriveProtocolAuditEventId,
+  deriveReceiptBusinessIds,
   parseAuditCorrelationId,
   parseAuditEventId,
+  parseBoardEntryId,
   parseBoardId,
   parseCaseId,
   parseInboxDeliveryId,
   parseInboxReceiptId,
+  parseMagicChatMessageRecordId,
+  parsePendingActionId,
+  parseWaitChallengeId,
   parseWorkflowRunId,
   type AuditCorrelationId,
   type AuditEventId,
@@ -33,7 +49,17 @@ import {
   type IntakeBusinessIds,
   type WorkflowRunId,
 } from "../core/ids.js";
-import { loadAuthorityMigration, type AuthorityMigration } from "./migration.js";
+import type {
+  MagicChatAckRequest,
+  MagicChatChallengeSnapshot,
+  MagicChatMessageSendRequest,
+  MagicChatPendingRequest,
+  MagicChatProtocolResult,
+  MagicChatProtocolSnapshot,
+  MagicChatQuestionSnapshot,
+  MagicChatRequestEnvelope,
+} from "../magicchat/adapter.js";
+import { loadAuthorityMigrations, type AuthorityMigration } from "./migration.js";
 import {
   parsePersistenceRow,
   requireHexDigest,
@@ -67,10 +93,27 @@ const WORKFLOW_STATES = [
   "REJECTED",
 ] as const;
 
-const REQUIRED_SCHEMA_OBJECTS = [
+const CLARIFICATION_CHALLENGE_VERSION = 1 as const;
+const CLARIFICATION_TTL_MILLISECONDS = 86_400_000;
+const CLARIFICATION_EXPECTED_INPUT_CONTRACT = "accord.clarification-answer/plain-text/v1" as const;
+const CLARIFICATION_PROMPT = "What decision constraint must the Researcher preserve?" as const;
+const CLARIFICATION_QUESTION_PAYLOAD = Object.freeze({
+  expectedInputContract: CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+  missingInformation: "decision_constraint" as const,
+  prompt: CLARIFICATION_PROMPT,
+});
+
+const REQUIRED_CORE_SCHEMA_OBJECTS = [
   "accord_schema_migrations",
   "workflow_definitions",
-  ...TRANSACTION_AUTHORITY_TABLES,
+  ...CORE_TRANSACTION_AUTHORITY_TABLES,
+] as const;
+const REQUIRED_SCHEMA_OBJECTS = [
+  ...REQUIRED_CORE_SCHEMA_OBJECTS,
+  "magicchat_inbox_states",
+  "wait_challenges",
+  "magicchat_rpc_actions",
+  "magicchat_messages",
 ] as const;
 
 export interface SqlitePragmaState {
@@ -296,7 +339,11 @@ function validateWorkflowDefinition(database: DatabaseSync): void {
   }
 }
 
-function validateAppliedSchema(database: DatabaseSync, migration: AuthorityMigration): void {
+function validateAppliedSchema(database: DatabaseSync, migrations: readonly AuthorityMigration[]): void {
+  const migration = migrations.at(-1);
+  if (migration === undefined) {
+    throw new Error("at least one pinned authority migration is required");
+  }
   const version = readUserVersion(database);
   if (version !== migration.version) {
     throw new Error(`unsupported database schema version ${version}; expected ${migration.version}`);
@@ -304,31 +351,35 @@ function validateAppliedSchema(database: DatabaseSync, migration: AuthorityMigra
 
   const migrationRows = database
     .prepare(
-      `SELECT version, migration_id, migration_sha256, schema_fingerprint, applied_at
-       FROM accord_schema_migrations`,
+       `SELECT version, migration_id, migration_sha256, schema_fingerprint, applied_at
+       FROM accord_schema_migrations
+       ORDER BY version`,
     )
     .all();
-  if (migrationRows.length !== 1) {
-    throw new Error("database must contain exactly one R003 migration record");
+  if (migrationRows.length !== migrations.length) {
+    throw new Error(`database must contain exactly ${migrations.length} R003 migration records`);
   }
-  const row = parsePersistenceRow(migrationRows[0], "migration record");
-  if (
-    requireInteger(row, "version") !== migration.version ||
-    requireString(row, "migration_id") !== migration.id ||
-    requireHexDigest(row, "migration_sha256") !== migration.sha256
-  ) {
-    throw new Error("database migration identity does not match the pinned migration");
+  for (const [index, expected] of migrations.entries()) {
+    const row = parsePersistenceRow(migrationRows[index], `migration record ${index}`);
+    if (
+      requireInteger(row, "version") !== expected.version ||
+      requireString(row, "migration_id") !== expected.id ||
+      requireHexDigest(row, "migration_sha256") !== expected.sha256 ||
+      requireHexDigest(row, "schema_fingerprint") !== expected.schemaFingerprint
+    ) {
+      throw new Error("database schema drifted from the pinned migration chain metadata");
+    }
+    requireIsoInstant(row, "applied_at");
   }
-  requireIsoInstant(row, "applied_at");
 
-  const recordedFingerprint = requireHexDigest(row, "schema_fingerprint");
   const actualFingerprint = schemaFingerprint(database);
-  if (recordedFingerprint !== migration.schemaFingerprint || actualFingerprint !== migration.schemaFingerprint) {
+  if (actualFingerprint !== migration.schemaFingerprint) {
     throw new Error(`database schema drifted from ${migration.id}`);
   }
 
   const names = new Set(readSchemaObjects(database).filter((item) => item.type === "table").map((item) => item.name));
-  for (const required of REQUIRED_SCHEMA_OBJECTS) {
+  const requiredSchemaObjects = version === DATABASE_SCHEMA_VERSION ? REQUIRED_SCHEMA_OBJECTS : REQUIRED_CORE_SCHEMA_OBJECTS;
+  for (const required of requiredSchemaObjects) {
     if (!names.has(required)) {
       throw new Error(`database schema is missing required table ${required}`);
     }
@@ -336,16 +387,28 @@ function validateAppliedSchema(database: DatabaseSync, migration: AuthorityMigra
   validateWorkflowDefinition(database);
 }
 
-function migrateAndValidate(database: DatabaseSync, migration: AuthorityMigration): void {
+function migrateAndValidate(database: DatabaseSync, migrations: readonly AuthorityMigration[]): void {
+  const latestMigration = migrations.at(-1);
+  if (latestMigration === undefined || latestMigration.version !== DATABASE_SCHEMA_VERSION) {
+    throw new Error("the pinned authority migration chain does not reach the current schema version");
+  }
   checkDatabaseHealth(database);
   const version = readUserVersion(database);
   if (version === 0) {
     ensureFreshDatabaseHasNoSchema(database);
-    applyMigration(database, migration);
-  } else if (version !== migration.version) {
-    throw new Error(`unsupported database schema version ${version}; expected ${migration.version}`);
+  } else {
+    const appliedIndex = migrations.findIndex((migration) => migration.version === version);
+    if (appliedIndex === -1) {
+      throw new Error(`unsupported database schema version ${version}; expected ${latestMigration.version}`);
+    }
+    validateAppliedSchema(database, migrations.slice(0, appliedIndex + 1));
   }
-  validateAppliedSchema(database, migration);
+  for (const migration of migrations) {
+    if (migration.version > version) {
+      applyMigration(database, migration);
+    }
+  }
+  validateAppliedSchema(database, migrations);
   checkDatabaseHealth(database);
   validatePersistedAuthorityState(database);
 }
@@ -378,6 +441,12 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
       `SELECT app_id, cursor
        FROM inbox_receipts
        WHERE processing_status = 'PROCESSED'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM magicchat_inbox_states AS s
+           WHERE s.receipt_id = inbox_receipts.receipt_id
+             AND s.event_role = 'CLARIFICATION_REPLY'
+         )
        ORDER BY app_id, cursor`,
     )
     .all();
@@ -433,6 +502,9 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
   const allDeliveries = queryAllInboxDeliveries(database);
   for (const [index, value] of allDeliveries.entries()) {
     const delivery = parsePersistedInboxDelivery(parsePersistenceRow(value, `inbox delivery ${index}`));
+    if (queryMagicChatEventRoleByReceipt(database, delivery.receiptId) === "CLARIFICATION_REPLY") {
+      continue;
+    }
     const graph = queryPersistedIntakeByReceiptId(database, delivery.receiptId);
     if (graph === undefined) {
       throw new Error("persisted authority integrity failed: a delivery audit has no complete processed receipt graph");
@@ -440,6 +512,33 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
     const persisted = parsePersistedIntake(graph);
     assertPersistedInboxDeliveryMatches(delivery, graph, persisted);
   }
+
+  const magicChatStates = database
+    .prepare("SELECT app_id, cursor FROM magicchat_inbox_states ORDER BY app_id, cursor")
+    .all();
+  for (const [index, value] of magicChatStates.entries()) {
+    const identity = parsePersistenceRow(value, `MagicChat inbox state ${index}`);
+    const appId = requireStableIdentifier(identity, "app_id");
+    const cursor = requireInteger(identity, "cursor");
+    const row = queryMagicChatProtocol(database, appId, cursor);
+    if (row === undefined) {
+      throw new Error("persisted MagicChat inbox state has no complete protocol graph");
+    }
+    const parsed = parseMagicChatProtocol(row);
+    const deliveries = queryInboxDeliveriesByReceipt(database, parsed.snapshot.receiptId);
+    if (deliveries.length === 0) {
+      throw new Error("persisted MagicChat inbox state has no delivery audit history");
+    }
+    for (const [deliveryIndex, deliveryValue] of deliveries.entries()) {
+      const delivery = parsePersistedInboxDelivery(
+        parsePersistenceRow(deliveryValue, `MagicChat inbox state ${index} delivery ${deliveryIndex}`),
+      );
+      if (delivery.caseId !== parsed.snapshot.caseId || delivery.receiptId !== parsed.snapshot.receiptId) {
+        throw new Error("persisted MagicChat delivery does not correlate its protocol receipt");
+      }
+    }
+  }
+  validatePersistedClarificationObservations(database);
 }
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
@@ -466,6 +565,214 @@ function requireStableIdentifier(row: PersistenceRow, column: string): string {
     throw new TypeError(`${column} is not a valid persisted stable identifier`);
   }
   return value;
+}
+
+function validatePersistedClarificationObservations(database: DatabaseSync): void {
+  const rows = database
+    .prepare(
+      `SELECT
+         ch.challenge_id,
+         ch.case_id,
+         ch.board_id,
+         ch.workflow_run_id,
+         ch.question_entry_id,
+         ch.expected_app_id,
+         ch.expected_conversation_id,
+         ch.expected_actor_id,
+         ch.expected_input_contract,
+         ch.clarification_message_id,
+         ch.clarification_message_sequence,
+         ch.resolved_by_receipt_id,
+         ch.resolved_at,
+         r.schema_version AS reply_receipt_schema_version,
+         r.app_id AS reply_app_id,
+         r.cursor AS reply_cursor,
+         r.envelope_event_id AS reply_envelope_event_id,
+         r.event_type AS reply_event_type,
+         r.payload_digest AS reply_payload_digest,
+         r.source_conversation_id AS reply_conversation_id,
+         r.source_message_id AS reply_message_id,
+         r.source_message_sequence AS reply_message_sequence,
+         r.source_actor_id AS reply_actor_id,
+         r.processing_status AS reply_processing_status,
+         r.received_at AS reply_received_at,
+         s.schema_version AS reply_state_schema_version,
+         s.correlation_id AS reply_correlation_id,
+         s.event_role AS reply_event_role,
+         s.normalized_body AS reply_normalized_body,
+         s.reply_to_message_id AS reply_reply_to_message_id,
+         s.message_created_at AS reply_message_created_at,
+         s.business_outcome AS reply_business_outcome,
+         s.business_stable AS reply_business_stable,
+         a.audit_event_id AS resume_audit_event_id,
+         a.schema_version AS resume_audit_schema_version,
+         a.correlation_id AS resume_audit_correlation_id,
+         a.details_json AS resume_audit_details_json,
+         a.recorded_at AS resume_audit_recorded_at,
+         o.board_entry_id AS observation_entry_id,
+         o.schema_version AS observation_schema_version,
+         o.board_id AS observation_board_id,
+         o.case_id AS observation_case_id,
+         o.entry_type AS observation_entry_type,
+         o.status AS observation_status,
+         o.author_type AS observation_author_type,
+         o.author_id AS observation_author_id,
+         o.payload_json AS observation_payload_json,
+         o.source_refs_json AS observation_source_refs_json,
+         o.based_on_json AS observation_based_on_json,
+         o.contradicts_json AS observation_contradicts_json,
+         o.supersedes_json AS observation_supersedes_json,
+         o.visibility AS observation_visibility,
+         o.trust_level AS observation_trust_level,
+         o.instruction_authority AS observation_instruction_authority,
+         o.created_revision AS observation_created_revision,
+         o.content_digest AS observation_content_digest,
+         o.created_at AS observation_created_at
+       FROM wait_challenges AS ch
+       LEFT JOIN inbox_receipts AS r
+         ON r.receipt_id = ch.resolved_by_receipt_id AND r.case_id = ch.case_id
+       LEFT JOIN magicchat_inbox_states AS s
+         ON s.receipt_id = r.receipt_id AND s.case_id = ch.case_id
+       LEFT JOIN audit_events AS a
+         ON a.receipt_id = r.receipt_id AND a.case_id = ch.case_id
+        AND a.event_kind = 'CLARIFICATION_RESUMED'
+       LEFT JOIN board_entries AS o
+         ON o.board_entry_id = json_extract(a.details_json, '$.observationEntryId')
+        AND o.case_id = ch.case_id
+       WHERE ch.state = 'RESUMED'
+       ORDER BY ch.challenge_id`,
+    )
+    .all();
+
+  for (const [index, value] of rows.entries()) {
+    try {
+      const row = parsePersistenceRow(value, `resumed clarification ${index}`);
+      requireLiteral(row, "expected_input_contract", CLARIFICATION_EXPECTED_INPUT_CONTRACT);
+      requireLiteral(row, "reply_receipt_schema_version", CONTRACT_VERSIONS.inboxReceipt);
+      requireLiteral(row, "reply_event_type", "message.created");
+      requireLiteral(row, "reply_processing_status", "PROCESSED");
+      requireLiteral(row, "reply_state_schema_version", CONTRACT_VERSIONS.magicChatInboxState);
+      requireLiteral(row, "reply_event_role", "CLARIFICATION_REPLY");
+      requireLiteral(row, "reply_business_outcome", "RESEARCHER");
+      if (requireInteger(row, "reply_business_stable") !== 1) {
+        throw new TypeError("matching reply business state is not stable");
+      }
+
+      const reply = normalizeSyntheticIntake({
+        actorId: requireStableIdentifier(row, "reply_actor_id"),
+        appId: requireStableIdentifier(row, "reply_app_id"),
+        conversationId: requireStableIdentifier(row, "reply_conversation_id"),
+        cursor: requireInteger(row, "reply_cursor"),
+        envelopeEventId: requireStableIdentifier(row, "reply_envelope_event_id"),
+        eventType: "message.created",
+        messageId: requireStableIdentifier(row, "reply_message_id"),
+        messageSequence: requireInteger(row, "reply_message_sequence"),
+        objective: requireString(row, "reply_normalized_body"),
+        payloadDigest: requireHexDigest(row, "reply_payload_digest"),
+        receivedAt: requireIsoInstant(row, "reply_received_at"),
+        schemaVersion: NORMALIZED_INTAKE_CONTRACT,
+        synthetic: true,
+      });
+      if (Date.parse(requireIsoInstant(row, "reply_message_created_at")) > Date.parse(reply.receivedAt)) {
+        throw new TypeError("matching reply message follows its receipt time");
+      }
+      const receiptIds = deriveReceiptBusinessIds(reply);
+      const receiptId = parseInboxReceiptId(row["resolved_by_receipt_id"]);
+      const caseId = parseCaseId(row["case_id"]);
+      const boardId = parseBoardId(row["board_id"]);
+      const workflowRunId = parseWorkflowRunId(row["workflow_run_id"]);
+      const challengeId = parseWaitChallengeId(row["challenge_id"]);
+      const questionEntryId = parseBoardEntryId(row["question_entry_id"]);
+      const clarificationMessageId = requireStableIdentifier(row, "clarification_message_id");
+      const clarificationMessageSequence = requireInteger(row, "clarification_message_sequence");
+      if (
+        receiptId !== receiptIds.receiptId ||
+        requireString(row, "reply_correlation_id") !== receiptIds.auditCorrelationId ||
+        reply.appId !== requireStableIdentifier(row, "expected_app_id") ||
+        reply.conversationId !== requireStableIdentifier(row, "expected_conversation_id") ||
+        reply.actorId !== requireStableIdentifier(row, "expected_actor_id") ||
+        requireStableIdentifier(row, "reply_reply_to_message_id") !== clarificationMessageId ||
+        reply.messageSequence <= clarificationMessageSequence ||
+        requireIsoInstant(row, "resolved_at") !== reply.receivedAt
+      ) {
+        throw new TypeError("matching reply does not satisfy its active challenge binding");
+      }
+
+      const observationEntryId = deriveObservationEntryId({
+        caseId,
+        messageId: reply.messageId,
+        receiptId,
+        workflowRunId,
+      });
+      const observationPayload = {
+        answer: reply.objective,
+        expectedInputContract: CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+        sourceMessageId: reply.messageId,
+        sourceMessageSequence: reply.messageSequence,
+      } as const;
+      const observationSourceRefs = [`magicchat:message:${reply.messageId}`];
+      const observationDigest = protocolDigest({
+        authorId: reply.actorId,
+        authorType: "HUMAN",
+        basedOn: [questionEntryId],
+        contradicts: [],
+        entryType: "Observation",
+        instructionAuthority: "NONE",
+        payload: observationPayload,
+        sourceRefs: observationSourceRefs,
+        status: "ACCEPTED",
+        supersedes: [],
+        trustLevel: "UNTRUSTED",
+        visibility: "CASE",
+      });
+      requireLiteral(row, "observation_schema_version", CONTRACT_VERSIONS.boardEntry);
+      if (
+        parseBoardEntryId(row["observation_entry_id"]) !== observationEntryId ||
+        parseBoardId(row["observation_board_id"]) !== boardId ||
+        parseCaseId(row["observation_case_id"]) !== caseId ||
+        requireString(row, "observation_entry_type") !== "Observation" ||
+        requireString(row, "observation_status") !== "ACCEPTED" ||
+        requireString(row, "observation_author_type") !== "HUMAN" ||
+        requireString(row, "observation_author_id") !== reply.actorId ||
+        requireString(row, "observation_payload_json") !== JSON.stringify(observationPayload) ||
+        requireString(row, "observation_source_refs_json") !== JSON.stringify(observationSourceRefs) ||
+        requireString(row, "observation_based_on_json") !== JSON.stringify([questionEntryId]) ||
+        requireString(row, "observation_contradicts_json") !== "[]" ||
+        requireString(row, "observation_supersedes_json") !== "[]" ||
+        requireString(row, "observation_visibility") !== "CASE" ||
+        requireString(row, "observation_trust_level") !== "UNTRUSTED" ||
+        requireString(row, "observation_instruction_authority") !== "NONE" ||
+        requireInteger(row, "observation_created_revision") !== 2 ||
+        requireHexDigest(row, "observation_content_digest") !== observationDigest ||
+        requireIsoInstant(row, "observation_created_at") !== reply.receivedAt
+      ) {
+        throw new TypeError("matching reply Observation does not match its durable input");
+      }
+
+      requireLiteral(row, "resume_audit_schema_version", CONTRACT_VERSIONS.auditEvent);
+      const auditDetails = parseJsonObject(requireString(row, "resume_audit_details_json"), "resume audit details");
+      requireExactObjectKeys(
+        auditDetails,
+        ["challengeId", "clarificationMessageId", "observationEntryId", "replyToMessageId", "sourceMessageId"],
+        "resume audit details",
+      );
+      if (
+        parseAuditEventId(row["resume_audit_event_id"]) !==
+          deriveProtocolAuditEventId(receiptIds.auditCorrelationId, "CLARIFICATION_RESUMED") ||
+        requireString(row, "resume_audit_correlation_id") !== receiptIds.auditCorrelationId ||
+        auditDetails["challengeId"] !== challengeId ||
+        auditDetails["clarificationMessageId"] !== clarificationMessageId ||
+        auditDetails["observationEntryId"] !== observationEntryId ||
+        auditDetails["replyToMessageId"] !== clarificationMessageId ||
+        auditDetails["sourceMessageId"] !== reply.messageId ||
+        requireIsoInstant(row, "resume_audit_recorded_at") !== reply.receivedAt
+      ) {
+        throw new TypeError("matching reply resume audit is invalid");
+      }
+    } catch (error) {
+      throw new TypeError("matching clarification Observation is invalid", { cause: error });
+    }
+  }
 }
 
 const PERSISTED_INTAKE_GRAPH_SELECT = `SELECT
@@ -791,6 +1098,1928 @@ function assertPersistedIntakeMatches(
   }
 }
 
+const MAGICCHAT_PROTOCOL_SELECT = `SELECT
+  s.schema_version AS magicchat_inbox_schema_version,
+  s.app_id,
+  s.cursor,
+  s.receipt_id,
+  s.case_id,
+  s.board_id,
+  s.workflow_run_id,
+  s.correlation_id,
+  s.event_role,
+  s.normalized_body,
+  s.reply_to_message_id,
+  s.message_created_at,
+  s.business_outcome,
+  s.business_stable,
+  s.ack_state,
+  s.ack_action_id,
+  s.created_at AS inbox_state_created_at,
+  s.stable_at,
+  s.ack_confirmed_at,
+  r.schema_version AS receipt_schema_version,
+  r.envelope_event_id,
+  r.event_type,
+  r.payload_digest,
+  r.source_conversation_id,
+  r.source_message_id,
+  r.source_message_sequence,
+  r.source_actor_id,
+  r.processing_status,
+  r.received_at,
+  b.revision AS board_revision,
+  w.state AS workflow_state,
+  w.revision AS workflow_revision,
+  q.board_entry_id AS question_entry_id,
+  q.schema_version AS question_schema_version,
+  q.board_id AS question_board_id,
+  q.case_id AS question_case_id,
+  q.entry_type AS question_entry_type,
+  q.status AS question_status,
+  q.author_type AS question_author_type,
+  q.author_id AS question_author_id,
+  q.payload_json AS question_payload_json,
+  q.source_refs_json AS question_source_refs_json,
+  q.based_on_json AS question_based_on_json,
+  q.contradicts_json AS question_contradicts_json,
+  q.supersedes_json AS question_supersedes_json,
+  q.visibility AS question_visibility,
+  q.trust_level AS question_trust_level,
+  q.instruction_authority AS question_instruction_authority,
+  q.created_revision AS question_created_revision,
+  q.content_digest AS question_content_digest,
+  q.created_at AS question_created_at,
+  ch.challenge_id,
+  source_s.correlation_id AS challenge_correlation_id,
+  ch.schema_version AS challenge_schema_version,
+  ch.challenge_version,
+  ch.state AS challenge_state,
+  ch.expected_app_id,
+  ch.expected_conversation_id,
+  ch.expected_actor_id,
+  ch.expected_input_contract,
+  ch.source_receipt_id,
+  ch.source_cursor,
+  ch.source_message_id AS challenge_source_message_id,
+  ch.source_message_sequence AS challenge_source_message_sequence,
+  ch.clarification_action_id,
+  ch.clarification_message_id,
+  ch.clarification_message_sequence,
+  ch.expires_at,
+  ch.created_at AS challenge_created_at,
+  ch.ready_at AS challenge_ready_at,
+  ch.resolved_by_receipt_id,
+  ch.resolved_at,
+  source_s.event_role AS challenge_source_event_role,
+  source_s.app_id AS challenge_source_state_app_id,
+  source_s.cursor AS challenge_source_state_cursor,
+  source_s.stable_at AS challenge_source_stable_at,
+  p.state AS clarification_action_state,
+  p.schema_version AS clarification_action_schema_version,
+  p.receipt_id AS clarification_action_receipt_id,
+  p.action_kind AS clarification_action_kind,
+  p.idempotency_key AS clarification_idempotency_key,
+  p.payload_digest AS clarification_action_payload_digest,
+  p.created_at AS clarification_action_created_at,
+  rpc.schema_version AS rpc_schema_version,
+  rpc.receipt_id AS clarification_rpc_receipt_id,
+  rpc.request_envelope_id AS clarification_request_envelope_id,
+  rpc.rpc_method AS clarification_rpc_method,
+  rpc.request_digest AS clarification_request_digest,
+  rpc.request_json,
+  rpc.confirmation_json AS clarification_confirmation_json,
+  rpc.confirmed_external_id AS clarification_confirmed_external_id,
+  rpc.created_at AS clarification_rpc_created_at,
+  rpc.confirmed_at AS clarification_rpc_confirmed_at,
+  clarification_message.message_record_id AS clarification_message_record_id,
+  clarification_message.schema_version AS clarification_message_schema_version,
+  clarification_message.receipt_id AS clarification_message_receipt_id,
+  clarification_message.action_id AS clarification_message_action_id,
+  clarification_message.challenge_id AS clarification_message_challenge_id,
+  clarification_message.purpose AS clarification_message_purpose,
+  clarification_message.conversation_id AS confirmed_message_conversation_id,
+  clarification_message.message_id AS confirmed_message_id,
+  clarification_message.message_sequence AS confirmed_message_sequence,
+  clarification_message.confirmed_at AS clarification_message_confirmed_at,
+  source_r.app_id AS challenge_source_app_id,
+  source_r.cursor AS challenge_source_receipt_cursor,
+  source_r.source_conversation_id AS challenge_source_conversation_id,
+  source_r.source_message_id AS challenge_source_receipt_message_id,
+  source_r.source_message_sequence AS challenge_source_receipt_message_sequence,
+  source_r.source_actor_id AS challenge_source_actor_id,
+  source_r.received_at AS challenge_source_received_at,
+  ack.action_id AS selected_ack_action_id,
+  ack.state AS ack_action_state,
+  ack.schema_version AS ack_action_schema_version,
+  ack.receipt_id AS ack_action_receipt_id,
+  ack.action_kind AS ack_action_kind,
+  ack.idempotency_key AS ack_idempotency_key,
+  ack.payload_digest AS ack_action_payload_digest,
+  ack.created_at AS ack_action_created_at,
+  ack_rpc.schema_version AS ack_rpc_schema_version,
+  ack_rpc.receipt_id AS ack_rpc_receipt_id,
+  ack_rpc.request_envelope_id AS ack_request_envelope_id,
+  ack_rpc.rpc_method AS ack_rpc_method,
+  ack_rpc.request_json AS ack_request_json,
+  ack_rpc.request_digest AS ack_request_digest,
+  ack_rpc.confirmation_json AS ack_confirmation_json,
+  ack_rpc.created_at AS ack_rpc_created_at,
+  ack_rpc.confirmed_at AS ack_rpc_confirmed_at
+FROM magicchat_inbox_states AS s
+JOIN inbox_receipts AS r ON r.receipt_id = s.receipt_id AND r.case_id = s.case_id
+JOIN boards AS b ON b.board_id = s.board_id AND b.case_id = s.case_id
+JOIN workflow_runs AS w ON w.workflow_run_id = s.workflow_run_id AND w.case_id = s.case_id
+JOIN wait_challenges AS ch ON ch.workflow_run_id = s.workflow_run_id AND ch.case_id = s.case_id
+JOIN magicchat_inbox_states AS source_s ON source_s.receipt_id = ch.source_receipt_id
+JOIN inbox_receipts AS source_r ON source_r.receipt_id = ch.source_receipt_id AND source_r.case_id = ch.case_id
+JOIN board_entries AS q ON q.board_entry_id = ch.question_entry_id AND q.case_id = s.case_id
+JOIN pending_side_effects AS p ON p.action_id = ch.clarification_action_id AND p.case_id = s.case_id
+JOIN magicchat_rpc_actions AS rpc ON rpc.action_id = p.action_id AND rpc.case_id = s.case_id
+LEFT JOIN magicchat_messages AS clarification_message
+  ON clarification_message.action_id = p.action_id AND clarification_message.case_id = s.case_id
+LEFT JOIN pending_side_effects AS ack ON ack.action_id = s.ack_action_id AND ack.case_id = s.case_id
+LEFT JOIN magicchat_rpc_actions AS ack_rpc ON ack_rpc.action_id = ack.action_id AND ack_rpc.case_id = s.case_id`;
+
+function queryMagicChatProtocol(
+  database: DatabaseSync,
+  appId: string,
+  cursor: number,
+): PersistenceRow | undefined {
+  const rows = database
+    .prepare(`${MAGICCHAT_PROTOCOL_SELECT} WHERE s.app_id = ? AND s.cursor = ?`)
+    .all(appId, cursor);
+  if (rows.length === 0) {
+    return undefined;
+  }
+  if (rows.length !== 1) {
+    throw new Error("MagicChat protocol receipt must resolve to exactly one durable state");
+  }
+  return parsePersistenceRow(rows[0], "MagicChat protocol state");
+}
+
+function queryMagicChatProtocols(database: DatabaseSync, appId: string): readonly PersistenceRow[] {
+  return database
+    .prepare(`${MAGICCHAT_PROTOCOL_SELECT} WHERE s.app_id = ? ORDER BY s.cursor`)
+    .all(appId)
+    .map((value, index) => parsePersistenceRow(value, `MagicChat protocol state ${index}`));
+}
+
+function queryMagicChatEventRoleByReceipt(
+  database: DatabaseSync,
+  receiptId: InboxReceiptId,
+): "INTAKE" | "CLARIFICATION_REPLY" | undefined {
+  const value = database
+    .prepare("SELECT event_role FROM magicchat_inbox_states WHERE receipt_id = ?")
+    .get(receiptId);
+  if (value === undefined) {
+    return undefined;
+  }
+  const row = parsePersistenceRow(value, "MagicChat inbox event role");
+  return requireOneOf(row, "event_role", ["INTAKE", "CLARIFICATION_REPLY"] as const);
+}
+
+function parseOptionalString(row: PersistenceRow, column: string): string | undefined {
+  const value = row[column];
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${column} must be a persisted string or null`);
+  }
+  return value;
+}
+
+function parseOptionalInteger(row: PersistenceRow, column: string): number | undefined {
+  const value = row[column];
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new TypeError(`${column} must be a persisted safe integer or null`);
+  }
+  return value;
+}
+
+function requireExactObjectKeys(
+  value: Readonly<Record<string, unknown>>,
+  expectedKeys: readonly string[],
+  label: string,
+): void {
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpected = [...expectedKeys].sort();
+  if (actualKeys.length !== sortedExpected.length || actualKeys.some((key, index) => key !== sortedExpected[index])) {
+    throw new TypeError(`${label} keys must be exactly ${sortedExpected.join(", ")}`);
+  }
+}
+
+function requireAllowedObjectKeys(
+  value: Readonly<Record<string, unknown>>,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
+  const missing = requiredKeys.find((key) => !Object.hasOwn(value, key));
+  if (unexpected !== undefined || missing !== undefined) {
+    throw new TypeError(`${label} does not match the pinned MagicChat struct`);
+  }
+}
+
+function parseMessageSendRequest(value: string, expectedConversationId: string): MagicChatMessageSendRequest {
+  const request = parseJsonObject(value, "MagicChat message.send request");
+  requireExactObjectKeys(request, ["v", "id", "kind", "method", "payload"], "MagicChat message.send request");
+  if (request["v"] !== 1 || request["kind"] !== "request") {
+    throw new TypeError("persisted MagicChat RPC must be a request envelope");
+  }
+  const id = requireStableIdentifier({ value: request["id"] }, "value");
+  if (!/^request_[0-9a-f]{64}$/u.test(id)) {
+    throw new TypeError("persisted MagicChat request Envelope ID is invalid");
+  }
+  if (request["method"] !== "message.send") {
+    throw new TypeError("persisted clarification RPC must be message.send");
+  }
+  const payload = asProtocolObject(request["payload"], "MagicChat message.send payload");
+  const target = asProtocolObject(payload["target"], "MagicChat message.send target");
+  const message = asProtocolObject(payload["message"], "MagicChat message.send message");
+  requireExactObjectKeys(payload, ["target", "message"], "MagicChat message.send payload");
+  requireExactObjectKeys(target, ["type", "conversation_id"], "MagicChat message.send target");
+  requireExactObjectKeys(message, ["type", "content"], "MagicChat message.send message");
+  if (
+    target["type"] !== "conversation" ||
+    target["conversation_id"] !== expectedConversationId ||
+    message["type"] !== "text" ||
+    message["content"] !== CLARIFICATION_PROMPT
+  ) {
+    throw new TypeError("persisted clarification request does not match the active challenge");
+  }
+  return Object.freeze({
+    id,
+    kind: "request",
+    method: "message.send",
+    payload: Object.freeze({
+      message: Object.freeze({ content: CLARIFICATION_PROMPT, type: "text" }),
+      target: Object.freeze({ conversation_id: expectedConversationId, type: "conversation" }),
+    }),
+    v: 1,
+  });
+}
+
+function parseAckRequest(value: string, expectedCursor: number): MagicChatAckRequest {
+  const request = parseJsonObject(value, "MagicChat ACK request");
+  requireExactObjectKeys(request, ["v", "id", "kind", "method", "payload"], "MagicChat ACK request");
+  if (request["v"] !== 1 || request["kind"] !== "request") {
+    throw new TypeError("persisted MagicChat ACK must be a request envelope");
+  }
+  const id = requireStableIdentifier({ value: request["id"] }, "value");
+  if (!/^request_[0-9a-f]{64}$/u.test(id)) {
+    throw new TypeError("persisted MagicChat ACK request Envelope ID is invalid");
+  }
+  if (request["method"] !== "events.ack") {
+    throw new TypeError("persisted MagicChat ACK request must use events.ack");
+  }
+  const payload = asProtocolObject(request["payload"], "MagicChat ACK payload");
+  if (payload["cursor"] !== expectedCursor || Object.keys(payload).length !== 1) {
+    throw new TypeError("persisted MagicChat ACK request does not match its receipt cursor");
+  }
+  return Object.freeze({
+    id,
+    kind: "request",
+    method: "events.ack",
+    payload: Object.freeze({ cursor: expectedCursor }),
+    v: 1,
+  });
+}
+
+function asProtocolObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseValidatedAckRequest(
+  row: PersistenceRow,
+  snapshot: MagicChatProtocolSnapshot,
+  auditCorrelationId: AuditCorrelationId,
+): MagicChatAckRequest {
+  requireLiteral(row, "ack_action_schema_version", CONTRACT_VERSIONS.pendingSideEffect);
+  requireLiteral(row, "ack_rpc_schema_version", CONTRACT_VERSIONS.magicChatRpcAction);
+  requireLiteral(row, "ack_action_kind", "ACK");
+  requireLiteral(row, "ack_rpc_method", "events.ack");
+  const request = parseAckRequest(requireString(row, "ack_request_json"), snapshot.cursor);
+  const requestDigest = protocolDigest(request);
+  const expectedIds = deriveAckBusinessIds({
+    auditCorrelationId,
+    caseId: snapshot.caseId,
+    cursor: snapshot.cursor,
+    receiptId: snapshot.receiptId,
+    workflowRunId: snapshot.workflowRunId,
+  });
+  const actionCreatedAt = requireIsoInstant(row, "ack_action_created_at");
+  const rpcCreatedAt = requireIsoInstant(row, "ack_rpc_created_at");
+  if (
+    parsePendingActionId(row["ack_action_id"]) !== expectedIds.actionId ||
+    parsePendingActionId(row["selected_ack_action_id"]) !== expectedIds.actionId ||
+    requireString(row, "ack_action_receipt_id") !== snapshot.receiptId ||
+    requireString(row, "ack_rpc_receipt_id") !== snapshot.receiptId ||
+    request.id !== expectedIds.requestEnvelopeId ||
+    requireString(row, "ack_request_envelope_id") !== request.id ||
+    requireString(row, "ack_idempotency_key") !== request.id ||
+    requireHexDigest(row, "ack_action_payload_digest") !== requestDigest ||
+    requireHexDigest(row, "ack_request_digest") !== requestDigest ||
+    actionCreatedAt !== rpcCreatedAt ||
+    actionCreatedAt !== requireIsoInstant(row, "stable_at")
+  ) {
+    throw new TypeError("persisted ACK request identity or digest is invalid");
+  }
+  return request;
+}
+
+interface ParsedMagicChatProtocol {
+  readonly snapshot: MagicChatProtocolSnapshot;
+  readonly nextRequest?: MagicChatRequestEnvelope;
+}
+
+function parseMagicChatProtocol(row: PersistenceRow): ParsedMagicChatProtocol {
+  requireLiteral(row, "magicchat_inbox_schema_version", CONTRACT_VERSIONS.magicChatInboxState);
+  requireLiteral(row, "question_schema_version", CONTRACT_VERSIONS.boardEntry);
+  requireLiteral(row, "question_entry_type", "Question");
+  requireLiteral(row, "challenge_schema_version", CONTRACT_VERSIONS.waitChallenge);
+  requireLiteral(row, "rpc_schema_version", CONTRACT_VERSIONS.magicChatRpcAction);
+  const eventRole = requireOneOf(row, "event_role", ["INTAKE", "CLARIFICATION_REPLY"] as const);
+  const phase = requireOneOf(row, "business_outcome", [
+    "CLARIFICATION_PENDING",
+    "WAIT_FOR_INPUT",
+    "UNMATCHED_INPUT",
+    "EXPIRED_INPUT",
+    "RESEARCHER",
+  ] as const);
+  const workflowState = requireOneOf(row, "workflow_state", WORKFLOW_STATES);
+  const ackState = requireOneOf(row, "ack_state", ["NONE", "ACK_INTENT", "ACK_CONFIRMED"] as const);
+  const challengeState = requireOneOf(row, "challenge_state", ["ACTIVE", "RESUMED", "EXPIRED"] as const);
+  const challengeVersion = requireInteger(row, "challenge_version");
+  if (challengeVersion !== CLARIFICATION_CHALLENGE_VERSION) {
+    throw new TypeError("persisted clarification challenge version is unsupported");
+  }
+  const questionPayload = parseJsonObject(requireString(row, "question_payload_json"), "Question payload");
+  if (
+    questionPayload["expectedInputContract"] !== CLARIFICATION_EXPECTED_INPUT_CONTRACT ||
+    questionPayload["missingInformation"] !== "decision_constraint" ||
+    questionPayload["prompt"] !== CLARIFICATION_PROMPT ||
+    Object.keys(questionPayload).length !== 3
+  ) {
+    throw new TypeError("persisted clarification Question payload is invalid");
+  }
+
+  const appId = requireStableIdentifier(row, "app_id");
+  const expectedAppId = requireStableIdentifier(row, "expected_app_id");
+  const expectedConversationId = requireStableIdentifier(row, "expected_conversation_id");
+  const expectedActorId = requireStableIdentifier(row, "expected_actor_id");
+  const sourceReceiptId = parseInboxReceiptId(row["source_receipt_id"]);
+  const sourceReceivedAt = requireIsoInstant(row, "challenge_source_received_at");
+  requireLiteral(row, "challenge_source_event_role", "INTAKE");
+  if (
+    expectedAppId !== appId ||
+    requireStableIdentifier(row, "challenge_source_state_app_id") !== appId ||
+    requireStableIdentifier(row, "challenge_source_app_id") !== appId ||
+    requireInteger(row, "challenge_source_state_cursor") !== requireInteger(row, "source_cursor") ||
+    requireInteger(row, "challenge_source_receipt_cursor") !== requireInteger(row, "source_cursor") ||
+    requireStableIdentifier(row, "challenge_source_conversation_id") !== expectedConversationId ||
+    requireStableIdentifier(row, "challenge_source_actor_id") !== expectedActorId ||
+    requireStableIdentifier(row, "challenge_source_receipt_message_id") !==
+      requireStableIdentifier(row, "challenge_source_message_id") ||
+    requireInteger(row, "challenge_source_receipt_message_sequence") !==
+      requireInteger(row, "challenge_source_message_sequence") ||
+    requireIsoInstant(row, "challenge_created_at") !== sourceReceivedAt ||
+    requireIsoInstant(row, "expires_at") !== clarificationExpiry(sourceReceivedAt)
+  ) {
+    throw new TypeError("persisted challenge binding does not match its source receipt");
+  }
+  const question: MagicChatQuestionSnapshot = Object.freeze({
+    entryType: "Question",
+    payload: CLARIFICATION_QUESTION_PAYLOAD,
+    questionId: parseBoardEntryId(row["question_entry_id"]),
+  });
+  const clarificationMessageId = parseOptionalString(row, "clarification_message_id");
+  const clarificationMessageSequence = parseOptionalInteger(row, "clarification_message_sequence");
+  const challengeBase = {
+    challengeId: parseWaitChallengeId(row["challenge_id"]),
+    clarificationActionId: parsePendingActionId(row["clarification_action_id"]),
+    expectedActorId,
+    expectedConversationId,
+    expectedInputContract: CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+    expiresAt: requireIsoInstant(row, "expires_at"),
+    sourceCursor: requireInteger(row, "source_cursor"),
+    sourceMessageId: requireStableIdentifier(row, "challenge_source_message_id"),
+    state: challengeState,
+    version: CLARIFICATION_CHALLENGE_VERSION,
+  } as const;
+  const challenge: MagicChatChallengeSnapshot = Object.freeze(
+    clarificationMessageId === undefined && clarificationMessageSequence === undefined
+      ? challengeBase
+      : clarificationMessageId !== undefined && clarificationMessageSequence !== undefined
+        ? {
+            ...challengeBase,
+            clarificationMessageId: requireStableIdentifier({ value: clarificationMessageId }, "value"),
+            clarificationMessageSequence,
+          }
+        : (() => {
+            throw new TypeError("persisted clarification message identity is partial");
+          })(),
+  );
+  const snapshot: MagicChatProtocolSnapshot = Object.freeze({
+    ackState,
+    appId,
+    boardId: parseBoardId(row["board_id"]),
+    boardRevision: requireInteger(row, "board_revision"),
+    caseId: parseCaseId(row["case_id"]),
+    challenge,
+    cursor: requireInteger(row, "cursor"),
+    phase,
+    question,
+    receiptId: parseInboxReceiptId(row["receipt_id"]),
+    workflowRevision: requireInteger(row, "workflow_revision"),
+    workflowRunId: parseWorkflowRunId(row["workflow_run_id"]),
+    workflowState,
+  });
+  if (
+    (eventRole === "INTAKE" && phase !== "CLARIFICATION_PENDING" && phase !== "WAIT_FOR_INPUT") ||
+    (eventRole === "CLARIFICATION_REPLY" &&
+      phase !== "UNMATCHED_INPUT" &&
+      phase !== "EXPIRED_INPUT" &&
+      phase !== "RESEARCHER")
+  ) {
+    throw new TypeError("MagicChat receipt role and business outcome are inconsistent");
+  }
+  if (phase === "CLARIFICATION_PENDING") {
+    if (
+      challengeState !== "ACTIVE" ||
+      workflowState !== "INTAKE" ||
+      snapshot.workflowRevision !== 1 ||
+      snapshot.boardRevision !== 1
+    ) {
+      throw new TypeError("pending clarification state is inconsistent with its active challenge");
+    }
+  } else if (challengeState === "ACTIVE") {
+    if (
+      workflowState !== "WAIT_FOR_INPUT" ||
+      snapshot.workflowRevision !== 2 ||
+      snapshot.boardRevision !== 1
+    ) {
+      throw new TypeError("active clarification challenge cannot coexist with the current Workflow or Board state");
+    }
+  } else if (challengeState === "RESUMED") {
+    if (
+      workflowState === "INTAKE" ||
+      workflowState === "WAIT_FOR_INPUT" ||
+      snapshot.workflowRevision < 3 ||
+      snapshot.boardRevision < 2 ||
+      phase === "EXPIRED_INPUT"
+    ) {
+      throw new TypeError("resumed clarification challenge is inconsistent with the downstream handoff");
+    }
+  } else if (
+    workflowState !== "FAILED" ||
+    snapshot.workflowRevision !== 3 ||
+    snapshot.boardRevision !== 1 ||
+    phase === "RESEARCHER"
+  ) {
+    throw new TypeError("expired clarification challenge is inconsistent with terminal failure");
+  }
+
+  requireLiteral(row, "receipt_schema_version", CONTRACT_VERSIONS.inboxReceipt);
+  requireLiteral(row, "event_type", "message.created");
+  requireLiteral(row, "processing_status", "PROCESSED");
+  const reconstructedInput = normalizeSyntheticIntake({
+    actorId: requireStableIdentifier(row, "source_actor_id"),
+    appId: snapshot.appId,
+    conversationId: requireStableIdentifier(row, "source_conversation_id"),
+    cursor: snapshot.cursor,
+    envelopeEventId: requireStableIdentifier(row, "envelope_event_id"),
+    eventType: "message.created",
+    messageId: requireStableIdentifier(row, "source_message_id"),
+    messageSequence: requireInteger(row, "source_message_sequence"),
+    objective: requireString(row, "normalized_body"),
+    receivedAt: requireIsoInstant(row, "received_at"),
+    schemaVersion: NORMALIZED_INTAKE_CONTRACT,
+    synthetic: true,
+  });
+  if (reconstructedInput.payloadDigest !== requireHexDigest(row, "payload_digest")) {
+    throw new TypeError("persisted MagicChat receipt payload digest is invalid");
+  }
+  const messageCreatedAt = requireIsoInstant(row, "message_created_at");
+  if (Date.parse(messageCreatedAt) > Date.parse(reconstructedInput.receivedAt)) {
+    throw new TypeError("persisted MagicChat message created_at follows its receipt time");
+  }
+  const replyToMessageId = parseOptionalString(row, "reply_to_message_id");
+  if (replyToMessageId !== undefined) requireStableIdentifier({ value: replyToMessageId }, "value");
+  if (eventRole === "CLARIFICATION_REPLY") {
+    const matchesChallenge =
+      reconstructedInput.conversationId === expectedConversationId &&
+      reconstructedInput.actorId === expectedActorId &&
+      replyToMessageId === clarificationMessageId &&
+      reconstructedInput.messageSequence > requireInteger(row, "clarification_message_sequence");
+    const expectedReplyPhase = !matchesChallenge
+      ? "UNMATCHED_INPUT"
+      : Date.parse(reconstructedInput.receivedAt) > Date.parse(requireIsoInstant(row, "expires_at"))
+        ? "EXPIRED_INPUT"
+        : "RESEARCHER";
+    if (phase !== expectedReplyPhase) {
+      throw new TypeError("persisted clarification reply business outcome does not match its durable challenge");
+    }
+  }
+
+  const receiptIds = deriveReceiptBusinessIds({
+    appId: snapshot.appId,
+    cursor: snapshot.cursor,
+    payloadDigest: requireHexDigest(row, "payload_digest"),
+  });
+  if (snapshot.receiptId !== receiptIds.receiptId || requireString(row, "correlation_id") !== receiptIds.auditCorrelationId) {
+    throw new TypeError("persisted MagicChat receipt identity does not match (app_id, cursor) and payload");
+  }
+  const expectedClarificationIds = deriveClarificationBusinessIds({
+    auditCorrelationId: parseAuditCorrelationId(row["challenge_correlation_id"]),
+    caseId: snapshot.caseId,
+    challengeVersion: CLARIFICATION_CHALLENGE_VERSION,
+    workflowRunId: snapshot.workflowRunId,
+  });
+  const questionSourceRefs = [
+    `magicchat:message:${requireStableIdentifier(row, "challenge_source_receipt_message_id")}`,
+  ];
+  const questionDigest = protocolDigest({
+    authorId: "accord.ingress",
+    authorType: "SYSTEM",
+    basedOn: [],
+    contradicts: [],
+    entryType: "Question",
+    instructionAuthority: "NONE",
+    payload: CLARIFICATION_QUESTION_PAYLOAD,
+    sourceRefs: questionSourceRefs,
+    status: "ACCEPTED",
+    supersedes: [],
+    trustLevel: "CANDIDATE",
+    visibility: "CASE",
+  });
+  if (
+    parseBoardId(row["question_board_id"]) !== snapshot.boardId ||
+    parseCaseId(row["question_case_id"]) !== snapshot.caseId ||
+    requireString(row, "question_status") !== "ACCEPTED" ||
+    requireString(row, "question_author_type") !== "SYSTEM" ||
+    requireString(row, "question_author_id") !== "accord.ingress" ||
+    requireString(row, "question_source_refs_json") !== JSON.stringify(questionSourceRefs) ||
+    requireString(row, "question_based_on_json") !== "[]" ||
+    requireString(row, "question_contradicts_json") !== "[]" ||
+    requireString(row, "question_supersedes_json") !== "[]" ||
+    requireString(row, "question_visibility") !== "CASE" ||
+    requireString(row, "question_trust_level") !== "CANDIDATE" ||
+    requireString(row, "question_instruction_authority") !== "NONE" ||
+    requireInteger(row, "question_created_revision") !== 1 ||
+    requireHexDigest(row, "question_content_digest") !== questionDigest ||
+    requireIsoInstant(row, "question_created_at") !== sourceReceivedAt
+  ) {
+    throw new TypeError("clarification Question metadata is invalid");
+  }
+  const clarificationRequest = parseMessageSendRequest(requireString(row, "request_json"), expectedConversationId);
+  const clarificationRequestDigest = protocolDigest(clarificationRequest);
+  requireLiteral(row, "clarification_action_schema_version", CONTRACT_VERSIONS.pendingSideEffect);
+  requireLiteral(row, "clarification_action_kind", "CLARIFICATION");
+  requireLiteral(row, "clarification_rpc_method", "message.send");
+  const clarificationActionCreatedAt = requireIsoInstant(row, "clarification_action_created_at");
+  const clarificationRpcCreatedAt = requireIsoInstant(row, "clarification_rpc_created_at");
+  if (
+    challenge.challengeId !== expectedClarificationIds.challengeId ||
+    question.questionId !== expectedClarificationIds.questionEntryId ||
+    challenge.clarificationActionId !== expectedClarificationIds.actionId ||
+    requireString(row, "clarification_action_receipt_id") !== sourceReceiptId ||
+    requireString(row, "clarification_rpc_receipt_id") !== sourceReceiptId ||
+    clarificationRequest.id !== expectedClarificationIds.requestEnvelopeId ||
+    requireString(row, "clarification_request_envelope_id") !== clarificationRequest.id ||
+    requireString(row, "clarification_idempotency_key") !== clarificationRequest.id ||
+    requireHexDigest(row, "clarification_request_digest") !== clarificationRequestDigest ||
+    requireHexDigest(row, "clarification_action_payload_digest") !== clarificationRequestDigest ||
+    clarificationActionCreatedAt !== sourceReceivedAt ||
+    clarificationRpcCreatedAt !== sourceReceivedAt
+  ) {
+    throw new TypeError("persisted clarification request identity or digest is invalid");
+  }
+
+  const clarificationActionState = requireOneOf(row, "clarification_action_state", [
+    "PENDING",
+    "CONFIRMED",
+    "UNKNOWN",
+    "FAILED",
+  ] as const);
+  if (phase === "CLARIFICATION_PENDING") {
+    if (
+      clarificationActionState !== "PENDING" ||
+      ackState !== "NONE" ||
+      requireInteger(row, "business_stable") !== 0 ||
+      parseOptionalString(row, "clarification_confirmation_json") !== undefined ||
+      parseOptionalString(row, "clarification_confirmed_external_id") !== undefined ||
+      parseOptionalString(row, "clarification_rpc_confirmed_at") !== undefined ||
+      parseOptionalString(row, "clarification_message_record_id") !== undefined ||
+      parseOptionalString(row, "challenge_ready_at") !== undefined ||
+      parseOptionalString(row, "challenge_source_stable_at") !== undefined
+    ) {
+      throw new TypeError("pending clarification state contains a premature confirmation");
+    }
+    return { nextRequest: clarificationRequest, snapshot };
+  }
+  if (clarificationActionState !== "CONFIRMED") {
+    throw new TypeError("stable MagicChat protocol state requires a confirmed clarification action");
+  }
+  const persistedMessageRecordId = parseOptionalString(row, "clarification_message_record_id");
+  if (persistedMessageRecordId === undefined) {
+    throw new TypeError("confirmed clarification message record is invalid");
+  }
+  const confirmation = parseJsonObject(
+    requireString(row, "clarification_confirmation_json"),
+    "MagicChat clarification confirmation",
+  );
+  requireExactObjectKeys(
+    confirmation,
+    ["conversation_id", "created_at", "id", "sender_app_id", "sequence"],
+    "MagicChat clarification confirmation",
+  );
+  const confirmedMessageId = requireStableIdentifier({ value: confirmation["id"] }, "value");
+  const confirmedConversationId = requireStableIdentifier({ value: confirmation["conversation_id"] }, "value");
+  const confirmedSenderAppId = requireStableIdentifier({ value: confirmation["sender_app_id"] }, "value");
+  const confirmedMessageSequence = confirmation["sequence"];
+  if (
+    typeof confirmedMessageSequence !== "number" ||
+    !Number.isSafeInteger(confirmedMessageSequence) ||
+    confirmedMessageSequence < 1
+  ) {
+    throw new TypeError("confirmed clarification message record is invalid");
+  }
+  const confirmedMessageCreatedAt = parseCanonicalInstant(
+    confirmation["created_at"],
+    "persisted clarification message created_at",
+  );
+  const clarificationConfirmedAt = requireIsoInstant(row, "clarification_rpc_confirmed_at");
+  const expectedMessageRecordId = deriveMagicChatMessageRecordId({
+    actionId: challenge.clarificationActionId,
+    messageId: confirmedMessageId,
+  });
+  requireLiteral(row, "clarification_message_schema_version", CONTRACT_VERSIONS.magicChatMessage);
+  if (
+    parseMagicChatMessageRecordId(persistedMessageRecordId) !== expectedMessageRecordId ||
+    requireString(row, "clarification_message_receipt_id") !== sourceReceiptId ||
+    parsePendingActionId(row["clarification_message_action_id"]) !== challenge.clarificationActionId ||
+    parseWaitChallengeId(row["clarification_message_challenge_id"]) !== challenge.challengeId ||
+    requireString(row, "clarification_message_purpose") !== "CLARIFICATION" ||
+    confirmedConversationId !== expectedConversationId ||
+    confirmedSenderAppId !== snapshot.appId ||
+    requireString(row, "confirmed_message_conversation_id") !== confirmedConversationId ||
+    confirmedMessageId !== clarificationMessageId ||
+    requireString(row, "clarification_confirmed_external_id") !== confirmedMessageId ||
+    requireString(row, "confirmed_message_id") !== confirmedMessageId ||
+    confirmedMessageSequence !== clarificationMessageSequence ||
+    requireInteger(row, "confirmed_message_sequence") !== confirmedMessageSequence ||
+    requireIsoInstant(row, "clarification_message_confirmed_at") !== clarificationConfirmedAt ||
+    requireIsoInstant(row, "challenge_ready_at") !== clarificationConfirmedAt ||
+    requireIsoInstant(row, "challenge_source_stable_at") !== clarificationConfirmedAt ||
+    Date.parse(confirmedMessageCreatedAt) > Date.parse(clarificationConfirmedAt) ||
+    Date.parse(clarificationConfirmedAt) < Date.parse(clarificationRpcCreatedAt)
+  ) {
+    throw new TypeError("confirmed clarification message record is invalid");
+  }
+  if (ackState === "ACK_INTENT") {
+    requireLiteral(row, "ack_action_state", "PENDING");
+    const ackRequest = parseValidatedAckRequest(row, snapshot, receiptIds.auditCorrelationId);
+    if (
+      parseOptionalString(row, "ack_confirmation_json") !== undefined ||
+      parseOptionalString(row, "ack_rpc_confirmed_at") !== undefined ||
+      parseOptionalString(row, "ack_confirmed_at") !== undefined
+    ) {
+      throw new TypeError("persisted ACK intent cannot contain a confirmation");
+    }
+    return {
+      nextRequest: ackRequest,
+      snapshot,
+    };
+  }
+  if (ackState === "ACK_CONFIRMED") {
+    requireLiteral(row, "ack_action_state", "CONFIRMED");
+    parseValidatedAckRequest(row, snapshot, receiptIds.auditCorrelationId);
+    const confirmation = parseJsonObject(requireString(row, "ack_confirmation_json"), "MagicChat ACK confirmation");
+    requireExactObjectKeys(confirmation, ["cursor"], "MagicChat ACK confirmation");
+    const rpcConfirmedAt = requireIsoInstant(row, "ack_rpc_confirmed_at");
+    if (
+      confirmation["cursor"] !== snapshot.cursor ||
+      requireIsoInstant(row, "ack_confirmed_at") !== rpcConfirmedAt ||
+      Date.parse(rpcConfirmedAt) < Date.parse(requireIsoInstant(row, "ack_rpc_created_at"))
+    ) {
+      throw new TypeError("persisted ACK confirmation is invalid");
+    }
+    return { snapshot };
+  }
+  throw new TypeError("stable MagicChat protocol state requires a durable ACK intent or confirmation");
+}
+
+function protocolDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function clarificationExpiry(receivedAt: string): string {
+  return new Date(Date.parse(receivedAt) + CLARIFICATION_TTL_MILLISECONDS).toISOString();
+}
+
+function createClarificationRequest(
+  requestEnvelopeId: string,
+  conversationId: string,
+): MagicChatMessageSendRequest {
+  return Object.freeze({
+    id: requestEnvelopeId,
+    kind: "request",
+    method: "message.send",
+    payload: Object.freeze({
+      message: Object.freeze({ content: CLARIFICATION_PROMPT, type: "text" }),
+      target: Object.freeze({ conversation_id: conversationId, type: "conversation" }),
+    }),
+    v: 1,
+  });
+}
+
+function createAckRequest(requestEnvelopeId: string, cursor: number): MagicChatAckRequest {
+  return Object.freeze({
+    id: requestEnvelopeId,
+    kind: "request",
+    method: "events.ack",
+    payload: Object.freeze({ cursor }),
+    v: 1,
+  });
+}
+
+const MAGICCHAT_ACTION_SELECT = `SELECT
+  rpc.action_id,
+  rpc.rpc_method,
+  rpc.request_json,
+  rpc.confirmation_json,
+  rpc.confirmed_external_id,
+  rpc.confirmed_at,
+  rpc.created_at AS rpc_created_at,
+  p.state AS action_state,
+  p.created_at AS action_created_at,
+  s.app_id,
+  s.cursor,
+  s.receipt_id,
+  s.case_id,
+  s.board_id,
+  s.workflow_run_id,
+  s.correlation_id,
+  s.business_outcome,
+  s.ack_state,
+  w.state AS workflow_state,
+  w.revision AS workflow_revision,
+  ch.challenge_id,
+  ch.state AS challenge_state,
+  ch.expected_conversation_id,
+  ch.expected_actor_id,
+  ch.source_message_sequence,
+  ch.clarification_message_id,
+  ch.clarification_message_sequence
+FROM magicchat_rpc_actions AS rpc
+JOIN pending_side_effects AS p ON p.action_id = rpc.action_id AND p.case_id = rpc.case_id
+JOIN magicchat_inbox_states AS s ON s.receipt_id = rpc.receipt_id AND s.case_id = rpc.case_id
+JOIN workflow_runs AS w ON w.workflow_run_id = s.workflow_run_id AND w.case_id = s.case_id
+JOIN wait_challenges AS ch ON ch.workflow_run_id = s.workflow_run_id AND ch.case_id = s.case_id`;
+
+function queryMagicChatAction(
+  database: DatabaseSync,
+  appId: string,
+  requestEnvelopeId: string,
+): PersistenceRow | undefined {
+  const rows = database
+    .prepare(`${MAGICCHAT_ACTION_SELECT} WHERE s.app_id = ? AND rpc.request_envelope_id = ?`)
+    .all(appId, requestEnvelopeId);
+  if (rows.length === 0) {
+    return undefined;
+  }
+  if (rows.length !== 1) {
+    throw new Error("MagicChat response must resolve to exactly one pending RPC action");
+  }
+  return parsePersistenceRow(rows[0], "MagicChat RPC action");
+}
+
+interface ClarificationConfirmation {
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly messageSequence: number;
+  readonly messageCreatedAt: string;
+  readonly senderAppId: string;
+}
+
+function parseClarificationConfirmation(
+  data: Readonly<Record<string, unknown>>,
+  receivedAt: string,
+): ClarificationConfirmation {
+  requireExactObjectKeys(data, ["conversation", "created", "message"], "MagicChat message.send confirmation");
+  if (typeof data["created"] !== "boolean") {
+    throw new TypeError("MagicChat message.send confirmation created must be a boolean");
+  }
+  const conversation = asProtocolObject(data["conversation"], "MagicChat message.send confirmation conversation");
+  requireAllowedObjectKeys(
+    conversation,
+    ["id", "name", "type"],
+    ["created_by_app_id", "parent", "source_message"],
+    "MagicChat message.send confirmation conversation",
+  );
+  const message = asProtocolObject(data["message"], "MagicChat message.send confirmation message");
+  requireAllowedObjectKeys(
+    message,
+    ["body", "created_at", "id", "sender", "seq", "summary"],
+    ["reply_to_message_id"],
+    "MagicChat message.send confirmation message",
+  );
+  const body = asProtocolObject(message["body"], "MagicChat message.send confirmation body");
+  requireExactObjectKeys(body, ["type", "content"], "MagicChat message.send confirmation body");
+  if (body["type"] !== "text" || body["content"] !== CLARIFICATION_PROMPT) {
+    throw new TypeError("MagicChat message.send confirmation body does not match the clarification request");
+  }
+  const sender = asProtocolObject(message["sender"], "MagicChat message.send confirmation sender");
+  requireAllowedObjectKeys(
+    sender,
+    ["id", "type"],
+    ["email", "name", "nickname"],
+    "MagicChat message.send confirmation sender",
+  );
+  const senderAppId = requireStableIdentifier({ value: sender["id"] }, "value");
+  if (sender["type"] !== "app") {
+    throw new TypeError("MagicChat clarified message sender must be an app");
+  }
+  if (typeof message["summary"] !== "string") {
+    throw new TypeError("MagicChat confirmed message summary must be text");
+  }
+  const messageId = requireStableIdentifier({ value: message["id"] }, "value");
+  const conversationId = requireStableIdentifier({ value: conversation["id"] }, "value");
+  const messageSequence = message["seq"];
+  if (typeof messageSequence !== "number" || !Number.isSafeInteger(messageSequence) || messageSequence < 1) {
+    throw new TypeError("MagicChat confirmed message sequence must be a positive safe integer");
+  }
+  const messageCreatedAt = parseMagicChatInstant(message["created_at"], "MagicChat confirmed message created_at");
+  if (Date.parse(receivedAt) < Date.parse(messageCreatedAt)) {
+    throw new TypeError("MagicChat confirmation receivedAt cannot precede the confirmed message created_at");
+  }
+  return { conversationId, messageCreatedAt, messageId, messageSequence, senderAppId };
+}
+
+function assertConfirmationFollowsDurableRpcIntent(actionRow: PersistenceRow, receivedAt: string): void {
+  const actionCreatedAt = requireIsoInstant(actionRow, "action_created_at");
+  const rpcCreatedAt = requireIsoInstant(actionRow, "rpc_created_at");
+  if (actionCreatedAt !== rpcCreatedAt) {
+    throw new TypeError("MagicChat pending action and RPC request intent timestamps do not match");
+  }
+  if (Date.parse(receivedAt) < Date.parse(rpcCreatedAt)) {
+    throw new TypeError("MagicChat RPC confirmation receivedAt cannot precede its durable request intent");
+  }
+}
+
+function insertProtocolAudit(
+  database: DatabaseSync,
+  input: {
+    readonly auditEventId: AuditEventId;
+    readonly correlationId: AuditCorrelationId;
+    readonly eventKind: string;
+    readonly caseId: CaseId;
+    readonly boardId: BoardId;
+    readonly workflowRunId: WorkflowRunId;
+    readonly receiptId: InboxReceiptId;
+    readonly details: Readonly<Record<string, unknown>>;
+    readonly recordedAt: string;
+  },
+): void {
+  database
+    .prepare(
+      `INSERT INTO audit_events (
+         audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id,
+         workflow_run_id, receipt_id, details_json, recorded_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.auditEventId,
+      CONTRACT_VERSIONS.auditEvent,
+      input.correlationId,
+      input.eventKind,
+      input.caseId,
+      input.boardId,
+      input.workflowRunId,
+      input.receiptId,
+      JSON.stringify(input.details),
+      input.recordedAt,
+    );
+}
+
+function confirmClarificationAction(
+  database: DatabaseSync,
+  actionRow: PersistenceRow,
+  data: Readonly<Record<string, unknown>>,
+  receivedAt: string,
+): readonly [string, number] {
+  requireLiteral(actionRow, "rpc_method", "message.send");
+  assertConfirmationFollowsDurableRpcIntent(actionRow, receivedAt);
+  const appId = requireStableIdentifier(actionRow, "app_id");
+  const cursor = requireInteger(actionRow, "cursor");
+  const receiptId = parseInboxReceiptId(actionRow["receipt_id"]);
+  const caseId = parseCaseId(actionRow["case_id"]);
+  const boardId = parseBoardId(actionRow["board_id"]);
+  const workflowRunId = parseWorkflowRunId(actionRow["workflow_run_id"]);
+  const correlationId = parseAuditCorrelationId(actionRow["correlation_id"]);
+  const actionId = parsePendingActionId(actionRow["action_id"]);
+  const challengeId = parseWaitChallengeId(actionRow["challenge_id"]);
+  const confirmation = parseClarificationConfirmation(data, receivedAt);
+  const expectedConversationId = requireStableIdentifier(actionRow, "expected_conversation_id");
+  const sourceMessageSequence = requireInteger(actionRow, "source_message_sequence");
+  if (confirmation.conversationId !== expectedConversationId) {
+    throw new Error("MagicChat clarification confirmation has the wrong conversation");
+  }
+  if (confirmation.senderAppId !== appId) {
+    throw new Error("MagicChat clarification confirmation has the wrong App sender");
+  }
+  if (confirmation.messageSequence <= sourceMessageSequence) {
+    throw new Error("MagicChat clarification message must follow the source message sequence");
+  }
+  const canonicalConfirmation = JSON.stringify({
+    conversation_id: confirmation.conversationId,
+    created_at: confirmation.messageCreatedAt,
+    id: confirmation.messageId,
+    sender_app_id: confirmation.senderAppId,
+    sequence: confirmation.messageSequence,
+  });
+  const actionState = requireOneOf(actionRow, "action_state", ["PENDING", "CONFIRMED", "UNKNOWN", "FAILED"] as const);
+  if (actionState === "CONFIRMED") {
+    if (
+      requireString(actionRow, "confirmation_json") !== canonicalConfirmation ||
+      requireString(actionRow, "confirmed_external_id") !== confirmation.messageId
+    ) {
+      throw new Error("replayed MagicChat clarification confirmation conflicts with durable confirmation");
+    }
+    return [appId, cursor];
+  }
+  if (actionState !== "PENDING") {
+    throw new Error(`MagicChat clarification action cannot be confirmed from ${actionState}`);
+  }
+  requireLiteral(actionRow, "business_outcome", "CLARIFICATION_PENDING");
+  requireLiteral(actionRow, "ack_state", "NONE");
+  requireLiteral(actionRow, "workflow_state", "INTAKE");
+  requireLiteral(actionRow, "challenge_state", "ACTIVE");
+  if (
+    parseOptionalString(actionRow, "clarification_message_id") !== undefined ||
+    parseOptionalInteger(actionRow, "clarification_message_sequence") !== undefined
+  ) {
+    throw new Error("active clarification challenge already contains a confirmed message");
+  }
+
+  const ackIds = deriveAckBusinessIds({
+    auditCorrelationId: correlationId,
+    caseId,
+    cursor,
+    receiptId,
+    workflowRunId,
+  });
+  const ackRequest = createAckRequest(ackIds.requestEnvelopeId, cursor);
+  const ackRequestJson = JSON.stringify(ackRequest);
+  const ackRequestDigest = protocolDigest(ackRequest);
+  const messageRecordId = deriveMagicChatMessageRecordId({ actionId, messageId: confirmation.messageId });
+
+  const sideEffectUpdate = database
+    .prepare("UPDATE pending_side_effects SET state = 'CONFIRMED' WHERE action_id = ? AND state = 'PENDING'")
+    .run(actionId);
+  const rpcUpdate = database
+    .prepare(
+      `UPDATE magicchat_rpc_actions
+       SET confirmation_json = ?, confirmed_external_id = ?, confirmed_at = ?
+       WHERE action_id = ? AND confirmation_json IS NULL AND confirmed_at IS NULL`,
+    )
+    .run(canonicalConfirmation, confirmation.messageId, receivedAt, actionId);
+  if (sideEffectUpdate.changes !== 1 || rpcUpdate.changes !== 1) {
+    throw new Error("clarification confirmation lost its pending-action compare-and-set");
+  }
+  database
+    .prepare(
+      `INSERT INTO magicchat_messages (
+         message_record_id, schema_version, case_id, workflow_run_id, receipt_id, action_id,
+         challenge_id, purpose, conversation_id, message_id, message_sequence, confirmed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CLARIFICATION', ?, ?, ?, ?)`,
+    )
+    .run(
+      messageRecordId,
+      CONTRACT_VERSIONS.magicChatMessage,
+      caseId,
+      workflowRunId,
+      receiptId,
+      actionId,
+      challengeId,
+      confirmation.conversationId,
+      confirmation.messageId,
+      confirmation.messageSequence,
+      receivedAt,
+    );
+  const challengeUpdate = database
+    .prepare(
+      `UPDATE wait_challenges
+       SET clarification_message_id = ?, clarification_message_sequence = ?, ready_at = ?
+       WHERE challenge_id = ? AND state = 'ACTIVE' AND clarification_message_id IS NULL`,
+    )
+    .run(confirmation.messageId, confirmation.messageSequence, receivedAt, challengeId);
+  const workflowUpdate = database
+    .prepare(
+      `UPDATE workflow_runs
+       SET state = 'WAIT_FOR_INPUT', revision = revision + 1
+       WHERE workflow_run_id = ? AND case_id = ? AND state = 'INTAKE' AND revision = 1`,
+    )
+    .run(workflowRunId, caseId);
+  if (challengeUpdate.changes !== 1 || workflowUpdate.changes !== 1) {
+    throw new Error("clarification confirmation could not establish the durable wait state");
+  }
+
+  database
+    .prepare(
+      `INSERT INTO pending_side_effects (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, action_kind,
+         idempotency_key, payload_digest, state, created_at
+       ) VALUES (?, ?, ?, ?, ?, 'ACK', ?, ?, 'PENDING', ?)`,
+    )
+    .run(
+      ackIds.actionId,
+      CONTRACT_VERSIONS.pendingSideEffect,
+      caseId,
+      workflowRunId,
+      receiptId,
+      ackIds.requestEnvelopeId,
+      ackRequestDigest,
+      receivedAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO magicchat_rpc_actions (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, request_envelope_id,
+         rpc_method, request_json, request_digest, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'events.ack', ?, ?, ?)`,
+    )
+    .run(
+      ackIds.actionId,
+      CONTRACT_VERSIONS.magicChatRpcAction,
+      caseId,
+      workflowRunId,
+      receiptId,
+      ackIds.requestEnvelopeId,
+      ackRequestJson,
+      ackRequestDigest,
+      receivedAt,
+    );
+  const inboxUpdate = database
+    .prepare(
+      `UPDATE magicchat_inbox_states
+       SET business_outcome = 'WAIT_FOR_INPUT', business_stable = 1, stable_at = ?,
+           ack_state = 'ACK_INTENT', ack_action_id = ?
+       WHERE receipt_id = ? AND business_outcome = 'CLARIFICATION_PENDING'
+         AND business_stable = 0 AND ack_state = 'NONE'`,
+    )
+    .run(receivedAt, ackIds.actionId, receiptId);
+  if (inboxUpdate.changes !== 1) {
+    throw new Error("clarification confirmation could not establish durable ACK intent");
+  }
+
+  insertProtocolAudit(database, {
+    auditEventId: deriveProtocolAuditEventId(correlationId, "CLARIFICATION_CONFIRMED"),
+    boardId,
+    caseId,
+    correlationId,
+    details: {
+      actionId,
+      challengeId,
+      messageId: confirmation.messageId,
+      messageSequence: confirmation.messageSequence,
+      senderAppId: confirmation.senderAppId,
+    },
+    eventKind: "CLARIFICATION_CONFIRMED",
+    receiptId,
+    recordedAt: receivedAt,
+    workflowRunId,
+  });
+  insertProtocolAudit(database, {
+    auditEventId: ackIds.auditEventId,
+    boardId,
+    caseId,
+    correlationId,
+    details: { actionId: ackIds.actionId, cursor, requestEnvelopeId: ackIds.requestEnvelopeId },
+    eventKind: "ACK_INTENT",
+    receiptId,
+    recordedAt: receivedAt,
+    workflowRunId,
+  });
+  return [appId, cursor];
+}
+
+function confirmAckAction(
+  database: DatabaseSync,
+  actionRow: PersistenceRow,
+  data: Readonly<Record<string, unknown>>,
+  receivedAt: string,
+): readonly [string, number] {
+  requireLiteral(actionRow, "rpc_method", "events.ack");
+  assertConfirmationFollowsDurableRpcIntent(actionRow, receivedAt);
+  const appId = requireStableIdentifier(actionRow, "app_id");
+  const cursor = requireInteger(actionRow, "cursor");
+  if (data["cursor"] !== cursor || Object.keys(data).length !== 1) {
+    throw new Error("MagicChat cumulative ACK confirmation does not match the intended cursor");
+  }
+  const receiptId = parseInboxReceiptId(actionRow["receipt_id"]);
+  const caseId = parseCaseId(actionRow["case_id"]);
+  const boardId = parseBoardId(actionRow["board_id"]);
+  const workflowRunId = parseWorkflowRunId(actionRow["workflow_run_id"]);
+  const correlationId = parseAuditCorrelationId(actionRow["correlation_id"]);
+  const actionId = parsePendingActionId(actionRow["action_id"]);
+  const canonicalConfirmation = JSON.stringify({ cursor });
+  const actionState = requireOneOf(actionRow, "action_state", ["PENDING", "CONFIRMED", "UNKNOWN", "FAILED"] as const);
+  if (actionState === "CONFIRMED") {
+    if (requireString(actionRow, "confirmation_json") !== canonicalConfirmation) {
+      throw new Error("replayed MagicChat ACK confirmation conflicts with durable confirmation");
+    }
+    requireLiteral(actionRow, "ack_state", "ACK_CONFIRMED");
+    return [appId, cursor];
+  }
+  if (actionState !== "PENDING") {
+    throw new Error(`MagicChat ACK action cannot be confirmed from ${actionState}`);
+  }
+  requireLiteral(actionRow, "ack_state", "ACK_INTENT");
+  if (requireString(actionRow, "business_outcome") === "CLARIFICATION_PENDING") {
+    throw new Error("MagicChat ACK cannot confirm before business state is stable");
+  }
+
+  const sideEffectUpdate = database
+    .prepare("UPDATE pending_side_effects SET state = 'CONFIRMED' WHERE action_id = ? AND state = 'PENDING'")
+    .run(actionId);
+  const rpcUpdate = database
+    .prepare(
+      `UPDATE magicchat_rpc_actions
+       SET confirmation_json = ?, confirmed_at = ?
+       WHERE action_id = ? AND confirmation_json IS NULL AND confirmed_at IS NULL`,
+    )
+    .run(canonicalConfirmation, receivedAt, actionId);
+  const inboxUpdate = database
+    .prepare(
+      `UPDATE magicchat_inbox_states
+       SET ack_state = 'ACK_CONFIRMED', ack_confirmed_at = ?
+       WHERE receipt_id = ? AND ack_state = 'ACK_INTENT' AND ack_action_id = ? AND business_stable = 1`,
+    )
+    .run(receivedAt, receiptId, actionId);
+  if (sideEffectUpdate.changes !== 1 || rpcUpdate.changes !== 1 || inboxUpdate.changes !== 1) {
+    throw new Error("MagicChat ACK confirmation lost its durable intent compare-and-set");
+  }
+  insertProtocolAudit(database, {
+    auditEventId: deriveProtocolAuditEventId(correlationId, "ACK_CONFIRMED"),
+    boardId,
+    caseId,
+    correlationId,
+    details: { actionId, cursor },
+    eventKind: "ACK_CONFIRMED",
+    receiptId,
+    recordedAt: receivedAt,
+    workflowRunId,
+  });
+  return [appId, cursor];
+}
+
+const ACTIVE_WAIT_CHALLENGE_SELECT = `SELECT
+  ch.challenge_id,
+  ch.case_id,
+  ch.board_id,
+  ch.workflow_run_id,
+  ch.question_entry_id,
+  ch.expected_app_id,
+  ch.expected_conversation_id,
+  ch.expected_actor_id,
+  ch.expected_input_contract,
+  ch.source_receipt_id,
+  ch.source_cursor,
+  ch.source_message_id,
+  ch.source_message_sequence,
+  ch.clarification_message_id,
+  ch.clarification_message_sequence,
+  ch.expires_at,
+  ch.state AS challenge_state,
+  w.state AS workflow_state,
+  w.revision AS workflow_revision,
+  b.revision AS board_revision
+FROM wait_challenges AS ch
+JOIN workflow_runs AS w ON w.workflow_run_id = ch.workflow_run_id AND w.case_id = ch.case_id
+JOIN boards AS b ON b.board_id = ch.board_id AND b.case_id = ch.case_id`;
+
+function queryActiveWaitChallenge(database: DatabaseSync, appId: string): PersistenceRow | undefined {
+  const rows = database
+    .prepare(`${ACTIVE_WAIT_CHALLENGE_SELECT} WHERE ch.expected_app_id = ? AND ch.state = 'ACTIVE'`)
+    .all(appId);
+  if (rows.length === 0) {
+    return undefined;
+  }
+  if (rows.length !== 1) {
+    throw new Error("one App must not have more than one active R003 wait challenge");
+  }
+  return parsePersistenceRow(rows[0], "active wait challenge");
+}
+
+function insertAckIntent(
+  database: DatabaseSync,
+  input: {
+    readonly auditCorrelationId: AuditCorrelationId;
+    readonly caseId: CaseId;
+    readonly workflowRunId: WorkflowRunId;
+    readonly receiptId: InboxReceiptId;
+    readonly cursor: number;
+    readonly createdAt: string;
+  },
+): ReturnType<typeof deriveAckBusinessIds> {
+  const ackIds = deriveAckBusinessIds(input);
+  const ackRequest = createAckRequest(ackIds.requestEnvelopeId, input.cursor);
+  const ackRequestJson = JSON.stringify(ackRequest);
+  const ackRequestDigest = protocolDigest(ackRequest);
+  database
+    .prepare(
+      `INSERT INTO pending_side_effects (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, action_kind,
+         idempotency_key, payload_digest, state, created_at
+       ) VALUES (?, ?, ?, ?, ?, 'ACK', ?, ?, 'PENDING', ?)`,
+    )
+    .run(
+      ackIds.actionId,
+      CONTRACT_VERSIONS.pendingSideEffect,
+      input.caseId,
+      input.workflowRunId,
+      input.receiptId,
+      ackIds.requestEnvelopeId,
+      ackRequestDigest,
+      input.createdAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO magicchat_rpc_actions (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, request_envelope_id,
+         rpc_method, request_json, request_digest, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'events.ack', ?, ?, ?)`,
+    )
+    .run(
+      ackIds.actionId,
+      CONTRACT_VERSIONS.magicChatRpcAction,
+      input.caseId,
+      input.workflowRunId,
+      input.receiptId,
+      ackIds.requestEnvelopeId,
+      ackRequestJson,
+      ackRequestDigest,
+      input.createdAt,
+    );
+  return ackIds;
+}
+
+function insertMatchingClarificationReply(
+  database: DatabaseSync,
+  input: NormalizedSyntheticIntake,
+  message: NormalizedMagicChatMessageCreated,
+  challengeRow: PersistenceRow,
+): void {
+  requireLiteral(challengeRow, "challenge_state", "ACTIVE");
+  requireLiteral(challengeRow, "workflow_state", "WAIT_FOR_INPUT");
+  requireLiteral(challengeRow, "expected_input_contract", CLARIFICATION_EXPECTED_INPUT_CONTRACT);
+  const expectedAppId = requireStableIdentifier(challengeRow, "expected_app_id");
+  const expectedConversationId = requireStableIdentifier(challengeRow, "expected_conversation_id");
+  const expectedActorId = requireStableIdentifier(challengeRow, "expected_actor_id");
+  const clarificationMessageId = requireStableIdentifier(challengeRow, "clarification_message_id");
+  const clarificationMessageSequence = requireInteger(challengeRow, "clarification_message_sequence");
+  const expiresAt = requireIsoInstant(challengeRow, "expires_at");
+  if (
+    input.appId !== expectedAppId ||
+    input.conversationId !== expectedConversationId ||
+    input.actorId !== expectedActorId ||
+    message.replyToMessageId !== clarificationMessageId
+  ) {
+    throw new Error("MagicChat reply does not match the active challenge App, actor, conversation, and reply-to identity");
+  }
+  if (Date.parse(input.receivedAt) > Date.parse(expiresAt)) {
+    throw new Error("MagicChat reply cannot resume an expired clarification challenge");
+  }
+  if (input.messageSequence <= clarificationMessageSequence) {
+    throw new Error("MagicChat reply must follow the confirmed clarification message sequence");
+  }
+
+  const caseId = parseCaseId(challengeRow["case_id"]);
+  const boardId = parseBoardId(challengeRow["board_id"]);
+  const workflowRunId = parseWorkflowRunId(challengeRow["workflow_run_id"]);
+  const challengeId = parseWaitChallengeId(challengeRow["challenge_id"]);
+  const questionEntryId = parseBoardEntryId(challengeRow["question_entry_id"]);
+  const receiptIds = deriveReceiptBusinessIds(input);
+  const receiptId = receiptIds.receiptId;
+  const resumedAuditEventId = deriveProtocolAuditEventId(receiptIds.auditCorrelationId, "CLARIFICATION_RESUMED");
+  const deliveryIds: IntakeBusinessIds = {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    auditEventId: resumedAuditEventId,
+    boardId,
+    caseId,
+    receiptId,
+    workflowRunId,
+  };
+  database
+    .prepare(
+      `INSERT INTO inbox_receipts (
+         receipt_id, schema_version, app_id, cursor, envelope_event_id, event_type,
+         payload_digest, source_conversation_id, source_message_id, source_message_sequence,
+         source_actor_id, case_id, board_id, workflow_run_id, processing_status, received_at
+       ) VALUES (?, ?, ?, ?, ?, 'message.created', ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSED', ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.inboxReceipt,
+      input.appId,
+      input.cursor,
+      input.envelopeEventId,
+      input.payloadDigest,
+      input.conversationId,
+      input.messageId,
+      input.messageSequence,
+      input.actorId,
+      caseId,
+      boardId,
+      workflowRunId,
+      input.receivedAt,
+    );
+  recordInboxDelivery(database, input, deliveryIds);
+
+  const observationEntryId = deriveObservationEntryId({
+    caseId,
+    messageId: input.messageId,
+    receiptId,
+    workflowRunId,
+  });
+  const observationPayload = {
+    answer: input.objective,
+    expectedInputContract: CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+    sourceMessageId: input.messageId,
+    sourceMessageSequence: input.messageSequence,
+  } as const;
+  const observationSourceRefs = [`magicchat:message:${input.messageId}`];
+  const observationDigest = protocolDigest({
+    authorId: input.actorId,
+    authorType: "HUMAN",
+    basedOn: [questionEntryId],
+    contradicts: [],
+    entryType: "Observation",
+    instructionAuthority: "NONE",
+    payload: observationPayload,
+    sourceRefs: observationSourceRefs,
+    status: "ACCEPTED",
+    supersedes: [],
+    trustLevel: "UNTRUSTED",
+    visibility: "CASE",
+  });
+  const boardUpdate = database
+    .prepare("UPDATE boards SET revision = revision + 1 WHERE board_id = ? AND case_id = ? AND revision = 1")
+    .run(boardId, caseId);
+  if (boardUpdate.changes !== 1) {
+    throw new Error("matching clarification reply could not acquire Board revision 2");
+  }
+  database
+    .prepare(
+      `INSERT INTO board_entries (
+         board_entry_id, schema_version, board_id, case_id, entry_type, status, author_type,
+         author_id, payload_json, source_refs_json, based_on_json, contradicts_json,
+         supersedes_json, visibility, trust_level, instruction_authority, created_revision,
+         content_digest, created_at
+       ) VALUES (?, ?, ?, ?, 'Observation', 'ACCEPTED', 'HUMAN', ?, ?, ?, ?, '[]', '[]',
+         'CASE', 'UNTRUSTED', 'NONE', 2, ?, ?)`,
+    )
+    .run(
+      observationEntryId,
+      CONTRACT_VERSIONS.boardEntry,
+      boardId,
+      caseId,
+      input.actorId,
+      JSON.stringify(observationPayload),
+      JSON.stringify(observationSourceRefs),
+      JSON.stringify([questionEntryId]),
+      observationDigest,
+      input.receivedAt,
+    );
+
+  const challengeUpdate = database
+    .prepare(
+      `UPDATE wait_challenges
+       SET state = 'RESUMED', resolved_by_receipt_id = ?, resolved_at = ?
+       WHERE challenge_id = ? AND state = 'ACTIVE' AND clarification_message_id = ?`,
+    )
+    .run(receiptId, input.receivedAt, challengeId, clarificationMessageId);
+  const workflowUpdate = database
+    .prepare(
+      `UPDATE workflow_runs
+       SET state = 'RESEARCHER', revision = revision + 1
+       WHERE workflow_run_id = ? AND case_id = ? AND state = 'WAIT_FOR_INPUT' AND revision = 2`,
+    )
+    .run(workflowRunId, caseId);
+  if (challengeUpdate.changes !== 1 || workflowUpdate.changes !== 1) {
+    throw new Error("matching clarification reply lost the active wait compare-and-set");
+  }
+
+  const ackIds = insertAckIntent(database, {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    caseId,
+    createdAt: input.receivedAt,
+    cursor: input.cursor,
+    receiptId,
+    workflowRunId,
+  });
+  database
+    .prepare(
+      `INSERT INTO magicchat_inbox_states (
+         receipt_id, schema_version, app_id, cursor, case_id, board_id, workflow_run_id,
+         correlation_id, event_role, normalized_body, reply_to_message_id, message_created_at, business_outcome,
+         business_stable, ack_state, ack_action_id, created_at, stable_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLARIFICATION_REPLY', ?, ?, ?, 'RESEARCHER',
+         1, 'ACK_INTENT', ?, ?, ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.magicChatInboxState,
+      input.appId,
+      input.cursor,
+      caseId,
+      boardId,
+      workflowRunId,
+      receiptIds.auditCorrelationId,
+      input.objective, message.replyToMessageId ?? null, message.messageCreatedAt,
+      ackIds.actionId,
+      input.receivedAt,
+      input.receivedAt,
+    );
+  insertProtocolAudit(database, {
+    auditEventId: resumedAuditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: {
+      challengeId,
+      clarificationMessageId,
+      observationEntryId,
+      replyToMessageId: message.replyToMessageId,
+      sourceMessageId: input.messageId,
+    },
+    eventKind: "CLARIFICATION_RESUMED",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+  insertProtocolAudit(database, {
+    auditEventId: ackIds.auditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: { actionId: ackIds.actionId, cursor: input.cursor, requestEnvelopeId: ackIds.requestEnvelopeId },
+    eventKind: "ACK_INTENT",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+}
+
+function insertUnmatchedClarificationReply(
+  database: DatabaseSync,
+  input: NormalizedSyntheticIntake,
+  message: NormalizedMagicChatMessageCreated,
+  challengeRow: PersistenceRow,
+): void {
+  requireLiteral(challengeRow, "challenge_state", "ACTIVE");
+  requireLiteral(challengeRow, "workflow_state", "WAIT_FOR_INPUT");
+  const caseId = parseCaseId(challengeRow["case_id"]);
+  const boardId = parseBoardId(challengeRow["board_id"]);
+  const workflowRunId = parseWorkflowRunId(challengeRow["workflow_run_id"]);
+  const challengeId = parseWaitChallengeId(challengeRow["challenge_id"]);
+  const receiptIds = deriveReceiptBusinessIds(input);
+  const receiptId = receiptIds.receiptId;
+  const unmatchedAuditEventId = deriveProtocolAuditEventId(receiptIds.auditCorrelationId, "UNMATCHED_INPUT");
+  const deliveryIds: IntakeBusinessIds = {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    auditEventId: unmatchedAuditEventId,
+    boardId,
+    caseId,
+    receiptId,
+    workflowRunId,
+  };
+  database
+    .prepare(
+      `INSERT INTO inbox_receipts (
+         receipt_id, schema_version, app_id, cursor, envelope_event_id, event_type,
+         payload_digest, source_conversation_id, source_message_id, source_message_sequence,
+         source_actor_id, case_id, board_id, workflow_run_id, processing_status, received_at
+       ) VALUES (?, ?, ?, ?, ?, 'message.created', ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSED', ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.inboxReceipt,
+      input.appId,
+      input.cursor,
+      input.envelopeEventId,
+      input.payloadDigest,
+      input.conversationId,
+      input.messageId,
+      input.messageSequence,
+      input.actorId,
+      caseId,
+      boardId,
+      workflowRunId,
+      input.receivedAt,
+    );
+  recordInboxDelivery(database, input, deliveryIds);
+  const ackIds = insertAckIntent(database, {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    caseId,
+    createdAt: input.receivedAt,
+    cursor: input.cursor,
+    receiptId,
+    workflowRunId,
+  });
+  database
+    .prepare(
+      `INSERT INTO magicchat_inbox_states (
+         receipt_id, schema_version, app_id, cursor, case_id, board_id, workflow_run_id,
+         correlation_id, event_role, normalized_body, reply_to_message_id, message_created_at, business_outcome,
+         business_stable, ack_state, ack_action_id, created_at, stable_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLARIFICATION_REPLY', ?, ?, ?, 'UNMATCHED_INPUT',
+         1, 'ACK_INTENT', ?, ?, ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.magicChatInboxState,
+      input.appId,
+      input.cursor,
+      caseId,
+      boardId,
+      workflowRunId,
+      receiptIds.auditCorrelationId,
+      input.objective, message.replyToMessageId ?? null, message.messageCreatedAt,
+      ackIds.actionId,
+      input.receivedAt,
+      input.receivedAt,
+    );
+  insertProtocolAudit(database, {
+    auditEventId: unmatchedAuditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: {
+      actualActorId: input.actorId,
+      actualConversationId: input.conversationId,
+      replyToMessageId: message.replyToMessageId ?? null,
+      challengeId,
+      expectedActorId: requireStableIdentifier(challengeRow, "expected_actor_id"),
+      expectedConversationId: requireStableIdentifier(challengeRow, "expected_conversation_id"),
+      expectedReplyToMessageId: requireStableIdentifier(challengeRow, "clarification_message_id"),
+      sourceMessageId: input.messageId,
+    },
+    eventKind: "UNMATCHED_INPUT",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+  insertProtocolAudit(database, {
+    auditEventId: ackIds.auditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: { actionId: ackIds.actionId, cursor: input.cursor, requestEnvelopeId: ackIds.requestEnvelopeId },
+    eventKind: "ACK_INTENT",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+}
+
+function insertExpiredClarificationReply(
+  database: DatabaseSync,
+  input: NormalizedSyntheticIntake,
+  message: NormalizedMagicChatMessageCreated,
+  challengeRow: PersistenceRow,
+): void {
+  requireLiteral(challengeRow, "challenge_state", "ACTIVE");
+  requireLiteral(challengeRow, "workflow_state", "WAIT_FOR_INPUT");
+  const expiresAt = requireIsoInstant(challengeRow, "expires_at");
+  if (Date.parse(input.receivedAt) <= Date.parse(expiresAt)) {
+    throw new Error("clarification challenge is not expired at the reply receipt time");
+  }
+  const caseId = parseCaseId(challengeRow["case_id"]);
+  const boardId = parseBoardId(challengeRow["board_id"]);
+  const workflowRunId = parseWorkflowRunId(challengeRow["workflow_run_id"]);
+  const challengeId = parseWaitChallengeId(challengeRow["challenge_id"]);
+  const receiptIds = deriveReceiptBusinessIds(input);
+  const receiptId = receiptIds.receiptId;
+  const expiredAuditEventId = deriveProtocolAuditEventId(receiptIds.auditCorrelationId, "CHALLENGE_EXPIRED");
+  const deliveryIds: IntakeBusinessIds = {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    auditEventId: expiredAuditEventId,
+    boardId,
+    caseId,
+    receiptId,
+    workflowRunId,
+  };
+  database
+    .prepare(
+      `INSERT INTO inbox_receipts (
+         receipt_id, schema_version, app_id, cursor, envelope_event_id, event_type,
+         payload_digest, source_conversation_id, source_message_id, source_message_sequence,
+         source_actor_id, case_id, board_id, workflow_run_id, processing_status, received_at
+       ) VALUES (?, ?, ?, ?, ?, 'message.created', ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSED', ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.inboxReceipt,
+      input.appId,
+      input.cursor,
+      input.envelopeEventId,
+      input.payloadDigest,
+      input.conversationId,
+      input.messageId,
+      input.messageSequence,
+      input.actorId,
+      caseId,
+      boardId,
+      workflowRunId,
+      input.receivedAt,
+    );
+  recordInboxDelivery(database, input, deliveryIds);
+  const challengeUpdate = database
+    .prepare(
+      `UPDATE wait_challenges
+       SET state = 'EXPIRED', resolved_by_receipt_id = ?, resolved_at = ?
+       WHERE challenge_id = ? AND state = 'ACTIVE'`,
+    )
+    .run(receiptId, input.receivedAt, challengeId);
+  const workflowUpdate = database
+    .prepare(
+      `UPDATE workflow_runs
+       SET state = 'FAILED', revision = revision + 1
+       WHERE workflow_run_id = ? AND case_id = ? AND state = 'WAIT_FOR_INPUT' AND revision = 2`,
+    )
+    .run(workflowRunId, caseId);
+  const caseUpdate = database
+    .prepare("UPDATE cases SET status = 'FAILED' WHERE case_id = ? AND status = 'OPEN'")
+    .run(caseId);
+  if (challengeUpdate.changes !== 1 || workflowUpdate.changes !== 1 || caseUpdate.changes !== 1) {
+    throw new Error("expired clarification reply lost the active wait compare-and-set");
+  }
+  const ackIds = insertAckIntent(database, {
+    auditCorrelationId: receiptIds.auditCorrelationId,
+    caseId,
+    createdAt: input.receivedAt,
+    cursor: input.cursor,
+    receiptId,
+    workflowRunId,
+  });
+  database
+    .prepare(
+      `INSERT INTO magicchat_inbox_states (
+         receipt_id, schema_version, app_id, cursor, case_id, board_id, workflow_run_id,
+         correlation_id, event_role, normalized_body, reply_to_message_id, message_created_at, business_outcome,
+         business_stable, ack_state, ack_action_id, created_at, stable_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLARIFICATION_REPLY', ?, ?, ?, 'EXPIRED_INPUT',
+         1, 'ACK_INTENT', ?, ?, ?)`,
+    )
+    .run(
+      receiptId,
+      CONTRACT_VERSIONS.magicChatInboxState,
+      input.appId,
+      input.cursor,
+      caseId,
+      boardId,
+      workflowRunId,
+      receiptIds.auditCorrelationId,
+      input.objective, message.replyToMessageId ?? null, message.messageCreatedAt,
+      ackIds.actionId,
+      input.receivedAt,
+      input.receivedAt,
+    );
+  insertProtocolAudit(database, {
+    auditEventId: expiredAuditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: { challengeId, expiresAt, replyToMessageId: message.replyToMessageId, sourceMessageId: input.messageId },
+    eventKind: "CHALLENGE_EXPIRED",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+  insertProtocolAudit(database, {
+    auditEventId: ackIds.auditEventId,
+    boardId,
+    caseId,
+    correlationId: receiptIds.auditCorrelationId,
+    details: { actionId: ackIds.actionId, cursor: input.cursor, requestEnvelopeId: ackIds.requestEnvelopeId },
+    eventKind: "ACK_INTENT",
+    receiptId,
+    recordedAt: input.receivedAt,
+    workflowRunId,
+  });
+}
+
+function insertClarificationBoundary(
+  database: DatabaseSync,
+  input: NormalizedSyntheticIntake,
+  message: NormalizedMagicChatMessageCreated,
+  ids: IntakeBusinessIds,
+): void {
+  const clarificationIds = deriveClarificationBusinessIds({
+    auditCorrelationId: ids.auditCorrelationId,
+    caseId: ids.caseId,
+    challengeVersion: CLARIFICATION_CHALLENGE_VERSION,
+    workflowRunId: ids.workflowRunId,
+  });
+  const request = createClarificationRequest(clarificationIds.requestEnvelopeId, input.conversationId);
+  const requestJson = JSON.stringify(request);
+  const requestDigest = protocolDigest(request);
+  const questionPayloadJson = JSON.stringify(CLARIFICATION_QUESTION_PAYLOAD);
+  const questionSourceRefs = [`magicchat:message:${input.messageId}`];
+  const questionDigest = protocolDigest({
+    authorId: "accord.ingress",
+    authorType: "SYSTEM",
+    basedOn: [],
+    contradicts: [],
+    entryType: "Question",
+    instructionAuthority: "NONE",
+    payload: CLARIFICATION_QUESTION_PAYLOAD,
+    sourceRefs: questionSourceRefs,
+    status: "ACCEPTED",
+    supersedes: [],
+    trustLevel: "CANDIDATE",
+    visibility: "CASE",
+  });
+
+  const boardUpdate = database
+    .prepare("UPDATE boards SET revision = 1 WHERE board_id = ? AND case_id = ? AND revision = 0")
+    .run(ids.boardId, ids.caseId);
+  if (boardUpdate.changes !== 1) {
+    throw new Error("clarification Question could not acquire Board revision 1");
+  }
+  database
+    .prepare(
+      `INSERT INTO board_entries (
+         board_entry_id, schema_version, board_id, case_id, entry_type, status, author_type,
+         author_id, payload_json, source_refs_json, based_on_json, contradicts_json,
+         supersedes_json, visibility, trust_level, instruction_authority, created_revision,
+         content_digest, created_at
+       ) VALUES (?, ?, ?, ?, 'Question', 'ACCEPTED', 'SYSTEM', 'accord.ingress', ?, ?, '[]', '[]',
+         '[]', 'CASE', 'CANDIDATE', 'NONE', 1, ?, ?)`,
+    )
+    .run(
+      clarificationIds.questionEntryId,
+      CONTRACT_VERSIONS.boardEntry,
+      ids.boardId,
+      ids.caseId,
+      questionPayloadJson,
+      JSON.stringify(questionSourceRefs),
+      questionDigest,
+      input.receivedAt,
+    );
+
+  database
+    .prepare(
+      `INSERT INTO pending_side_effects (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, action_kind,
+         idempotency_key, payload_digest, state, created_at
+       ) VALUES (?, ?, ?, ?, ?, 'CLARIFICATION', ?, ?, 'PENDING', ?)`,
+    )
+    .run(
+      clarificationIds.actionId,
+      CONTRACT_VERSIONS.pendingSideEffect,
+      ids.caseId,
+      ids.workflowRunId,
+      ids.receiptId,
+      clarificationIds.requestEnvelopeId,
+      requestDigest,
+      input.receivedAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO magicchat_rpc_actions (
+         action_id, schema_version, case_id, workflow_run_id, receipt_id, request_envelope_id,
+         rpc_method, request_json, request_digest, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'message.send', ?, ?, ?)`,
+    )
+    .run(
+      clarificationIds.actionId,
+      CONTRACT_VERSIONS.magicChatRpcAction,
+      ids.caseId,
+      ids.workflowRunId,
+      ids.receiptId,
+      clarificationIds.requestEnvelopeId,
+      requestJson,
+      requestDigest,
+      input.receivedAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO wait_challenges (
+         challenge_id, schema_version, case_id, board_id, workflow_run_id, question_entry_id,
+         challenge_version, expected_app_id, expected_conversation_id, expected_actor_id,
+         expected_input_contract, source_receipt_id, source_cursor, source_message_id,
+         source_message_sequence, clarification_action_id, expires_at, state, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)`,
+    )
+    .run(
+      clarificationIds.challengeId,
+      CONTRACT_VERSIONS.waitChallenge,
+      ids.caseId,
+      ids.boardId,
+      ids.workflowRunId,
+      clarificationIds.questionEntryId,
+      CLARIFICATION_CHALLENGE_VERSION,
+      input.appId,
+      input.conversationId,
+      input.actorId,
+      CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+      ids.receiptId,
+      input.cursor,
+      input.messageId,
+      input.messageSequence,
+      clarificationIds.actionId,
+      clarificationExpiry(input.receivedAt),
+      input.receivedAt,
+    );
+  database
+    .prepare(
+      `INSERT INTO magicchat_inbox_states (
+         receipt_id, schema_version, app_id, cursor, case_id, board_id, workflow_run_id,
+         correlation_id, event_role, normalized_body, reply_to_message_id, message_created_at, business_outcome,
+         business_stable, ack_state, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'INTAKE', ?, ?, ?, 'CLARIFICATION_PENDING', 0, 'NONE', ?)`,
+    )
+    .run(
+      ids.receiptId,
+      CONTRACT_VERSIONS.magicChatInboxState,
+      input.appId,
+      input.cursor,
+      ids.caseId,
+      ids.boardId,
+      ids.workflowRunId,
+      ids.auditCorrelationId,
+      input.objective, message.replyToMessageId ?? null, message.messageCreatedAt,
+      input.receivedAt,
+    );
+
+  const details = JSON.stringify({
+    challengeId: clarificationIds.challengeId,
+    challengeVersion: CLARIFICATION_CHALLENGE_VERSION,
+    expectedInputContract: CLARIFICATION_EXPECTED_INPUT_CONTRACT,
+    messageCreatedAt: message.messageCreatedAt,
+    questionEntryId: clarificationIds.questionEntryId,
+    requestEnvelopeId: clarificationIds.requestEnvelopeId,
+  });
+  database
+    .prepare(
+      `INSERT INTO audit_events (
+         audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id,
+         workflow_run_id, receipt_id, details_json, recorded_at
+       ) VALUES (?, ?, ?, 'CLARIFICATION_REQUIRED', ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      clarificationIds.auditEventId,
+      CONTRACT_VERSIONS.auditEvent,
+      ids.auditCorrelationId,
+      ids.caseId,
+      ids.boardId,
+      ids.workflowRunId,
+      ids.receiptId,
+      details,
+      input.receivedAt,
+    );
+}
+
+function assertMagicChatReplayMatches(
+  row: PersistenceRow,
+  input: NormalizedSyntheticIntake,
+  message: NormalizedMagicChatMessageCreated,
+): void {
+  const receiptIds = deriveReceiptBusinessIds(input);
+  const expectedPairs: ReadonlyArray<readonly [unknown, unknown, string]> = [
+    [requireString(row, "app_id"), input.appId, "App ID"],
+    [requireInteger(row, "cursor"), message.cursor, "cursor"],
+    [requireString(row, "source_conversation_id"), message.conversationId, "conversation ID"],
+    [requireString(row, "source_message_id"), message.messageId, "message ID"],
+    [requireInteger(row, "source_message_sequence"), message.messageSequence, "message sequence"],
+    [requireString(row, "source_actor_id"), message.actorId, "actor ID"],
+    [requireString(row, "normalized_body"), message.body, "message body"],
+    [requireString(row, "message_created_at"), message.messageCreatedAt, "message created_at"],
+    [parseOptionalString(row, "reply_to_message_id"), message.replyToMessageId, "reply-to message ID"],
+    [requireString(row, "payload_digest"), input.payloadDigest, "payload digest"],
+    [requireString(row, "receipt_id"), receiptIds.receiptId, "receipt ID"],
+    [requireString(row, "correlation_id"), receiptIds.auditCorrelationId, "audit correlation ID"],
+  ];
+  for (const [actual, expected, label] of expectedPairs) {
+    if (actual !== expected) {
+      throw new Error(`replayed MagicChat event conflicts with persisted ${label}`);
+    }
+  }
+}
+
 function recordInboxDelivery(
   database: DatabaseSync,
   input: NormalizedSyntheticIntake,
@@ -974,7 +3203,7 @@ export class AuthorityDatabase {
 
     let database: DatabaseSync | undefined;
     try {
-      const migration = loadAuthorityMigration();
+      const migrations = loadAuthorityMigrations();
       assertDatabasePathIsNotSymlink(databasePath);
       database = new DatabaseSync(databasePath);
       assertDatabasePathIsNotSymlink(databasePath);
@@ -982,7 +3211,7 @@ export class AuthorityDatabase {
         chmodSync(databasePath, 0o600);
       }
       configureAndReadPragmas(database);
-      migrateAndValidate(database, migration);
+      migrateAndValidate(database, migrations);
       configureAndReadPragmas(database);
       return new AuthorityDatabase(database);
     } catch (error) {
@@ -1069,6 +3298,193 @@ export class AuthorityDatabase {
     const persistedDelivery = parsePersistedInboxDelivery(persistedDeliveryRow);
     assertPersistedInboxDeliveryMatches(persistedDelivery, persistedRow, persisted);
     return { ...persisted, delivery: persistedDelivery, outcome: transaction.outcome };
+  }
+
+  public inspectMagicChatProtocol(appId: unknown, cursor: unknown): MagicChatProtocolSnapshot | undefined {
+    this.#assertOpen();
+    const [validatedAppId, validatedCursor] = validateInspectionKey(appId, cursor);
+    const row = queryMagicChatProtocol(this.#database, validatedAppId, validatedCursor);
+    return row === undefined ? undefined : parseMagicChatProtocol(row).snapshot;
+  }
+
+  public inspectPendingMagicChatRequests(appId: unknown): readonly MagicChatPendingRequest[] {
+    this.#assertOpen();
+    const [validatedAppId] = validateInspectionKey(appId, 1);
+    const pending = queryMagicChatProtocols(this.#database, validatedAppId).flatMap((row) => {
+      const parsed = parseMagicChatProtocol(row);
+      return parsed.nextRequest === undefined
+        ? []
+        : [Object.freeze({ cursor: parsed.snapshot.cursor, request: parsed.nextRequest })];
+    });
+    return Object.freeze(pending);
+  }
+
+  public processMagicChatEnvelope(
+    appId: unknown,
+    envelope: unknown,
+    receivedAt: unknown,
+  ): MagicChatProtocolResult {
+    this.#assertOpen();
+    const [validatedAppId] = validateInspectionKey(appId, 1);
+    const validatedReceivedAt = parseCanonicalInstant(receivedAt, "MagicChat delivery receivedAt");
+    const normalizedEnvelope = normalizeMagicChatEnvelope(envelope);
+    if (normalizedEnvelope.kind === "RESPONSE") {
+      if (!normalizedEnvelope.ok) {
+        throw new Error(
+          `MagicChat RPC ${normalizedEnvelope.requestEnvelopeId} failed with ${normalizedEnvelope.error.code}: ${normalizedEnvelope.error.message}`,
+        );
+      }
+      const [responseAppId, responseCursor] = runTransaction(this.#database, () => {
+        const action = queryMagicChatAction(
+          this.#database,
+          validatedAppId,
+          normalizedEnvelope.requestEnvelopeId,
+        );
+        if (action === undefined) {
+          throw new Error("MagicChat response does not match a durable pending RPC action");
+        }
+        const method = requireString(action, "rpc_method");
+        if (method === "message.send") {
+          return confirmClarificationAction(this.#database, action, normalizedEnvelope.payload, validatedReceivedAt);
+        }
+        if (method === "events.ack") {
+          return confirmAckAction(this.#database, action, normalizedEnvelope.payload, validatedReceivedAt);
+        }
+        throw new Error(`unsupported durable MagicChat RPC method ${method}`);
+      });
+      const responseState = queryMagicChatProtocol(this.#database, responseAppId, responseCursor);
+      if (responseState === undefined) {
+        throw new Error("confirmed MagicChat RPC has no durable protocol receipt");
+      }
+      const persisted = parseMagicChatProtocol(responseState);
+      return persisted.nextRequest === undefined
+        ? { outcome: "CONFIRMED", snapshot: persisted.snapshot }
+        : { nextRequest: persisted.nextRequest, outcome: "CONFIRMED", snapshot: persisted.snapshot };
+    }
+    const message = normalizedEnvelope;
+    if (Date.parse(validatedReceivedAt) < Date.parse(message.messageCreatedAt)) {
+      throw new TypeError("MagicChat delivery receivedAt cannot precede message created_at");
+    }
+    const input = normalizeSyntheticIntake({
+      actorId: message.actorId,
+      appId: validatedAppId,
+      conversationId: message.conversationId,
+      cursor: message.cursor,
+      envelopeEventId: message.envelopeEventId,
+      eventType: "message.created",
+      messageId: message.messageId,
+      messageSequence: message.messageSequence,
+      objective: message.body,
+      receivedAt: validatedReceivedAt,
+      schemaVersion: NORMALIZED_INTAKE_CONTRACT,
+      synthetic: true,
+    });
+    const intakeIds = deriveIntakeBusinessIds({
+      appId: input.appId,
+      conversationId: input.conversationId,
+      cursor: input.cursor,
+      messageId: input.messageId,
+      payloadDigest: input.payloadDigest,
+      workflowDefinition: FIXED_WORKFLOW_DEFINITION,
+    });
+
+    const outcome = runTransaction(this.#database, () => {
+      const existingProtocol = queryMagicChatProtocol(this.#database, input.appId, input.cursor);
+      if (existingProtocol !== undefined) {
+        assertMagicChatReplayMatches(existingProtocol, input, message);
+        const eventRole = requireOneOf(existingProtocol, "event_role", ["INTAKE", "CLARIFICATION_REPLY"] as const);
+        if (eventRole === "INTAKE") {
+          const existingIntakeRow = queryPersistedIntake(this.#database, input.appId, input.cursor);
+          if (existingIntakeRow === undefined) {
+            throw new Error("MagicChat intake replay has no correlated Issue 10 authority graph");
+          }
+          const existingIntake = parsePersistedIntake(existingIntakeRow);
+          assertPersistedIntakeMatches(existingIntakeRow, existingIntake, input, intakeIds);
+          recordInboxDelivery(this.#database, input, intakeIds);
+        } else {
+          const receiptIds = deriveReceiptBusinessIds(input);
+          const replayIds: IntakeBusinessIds = {
+            auditCorrelationId: receiptIds.auditCorrelationId,
+            auditEventId: deriveProtocolAuditEventId(receiptIds.auditCorrelationId, "MESSAGE_REPLAYED"),
+            boardId: parseBoardId(existingProtocol["board_id"]),
+            caseId: parseCaseId(existingProtocol["case_id"]),
+            receiptId: receiptIds.receiptId,
+            workflowRunId: parseWorkflowRunId(existingProtocol["workflow_run_id"]),
+          };
+          recordInboxDelivery(this.#database, input, replayIds);
+        }
+        return "REPLAYED" as const;
+      }
+      if (queryPersistedIntake(this.#database, input.appId, input.cursor) !== undefined) {
+        throw new Error("MagicChat receipt collides with a non-protocol synthetic intake");
+      }
+      const incompleteLower = this.#database
+        .prepare(
+          `SELECT cursor
+           FROM magicchat_inbox_states
+           WHERE app_id = ? AND cursor < ? AND ack_state <> 'ACK_CONFIRMED'
+           ORDER BY cursor
+           LIMIT 1`,
+        )
+        .get(input.appId, input.cursor);
+      if (incompleteLower !== undefined) {
+        const row = parsePersistenceRow(incompleteLower, "incomplete lower MagicChat cursor");
+        throw new Error(
+          `MagicChat cursor ${input.cursor} is blocked by incomplete lower cursor ${requireInteger(row, "cursor")}`,
+        );
+      }
+      const processedHigher = this.#database
+        .prepare(
+          `SELECT cursor
+           FROM magicchat_inbox_states
+           WHERE app_id = ? AND cursor > ?
+           ORDER BY cursor
+           LIMIT 1`,
+        )
+        .get(input.appId, input.cursor);
+      if (processedHigher !== undefined) {
+        throw new Error("a previously unseen lower MagicChat cursor cannot arrive after a higher cursor");
+      }
+
+      const activeChallenge = queryActiveWaitChallenge(this.#database, input.appId);
+      if (activeChallenge !== undefined) {
+        const challengeExpired =
+          Date.parse(input.receivedAt) > Date.parse(requireIsoInstant(activeChallenge, "expires_at"));
+        const matchesChallenge =
+          requireString(activeChallenge, "expected_conversation_id") === input.conversationId &&
+          requireString(activeChallenge, "expected_actor_id") === input.actorId &&
+          requireString(activeChallenge, "clarification_message_id") === message.replyToMessageId &&
+          requireInteger(activeChallenge, "clarification_message_sequence") < input.messageSequence;
+        if (!matchesChallenge) {
+          insertUnmatchedClarificationReply(this.#database, input, message, activeChallenge);
+        } else if (challengeExpired) {
+          insertExpiredClarificationReply(this.#database, input, message, activeChallenge);
+        } else {
+          insertMatchingClarificationReply(this.#database, input, message, activeChallenge);
+        }
+        return "CREATED" as const;
+      }
+      const existingAppState = this.#database
+        .prepare("SELECT cursor FROM magicchat_inbox_states WHERE app_id = ? ORDER BY cursor LIMIT 1")
+        .get(input.appId);
+      if (existingAppState !== undefined) {
+        throw new Error("the fixed R003 App has no active clarification challenge for a new message");
+      }
+
+      insertIntakeGraph(this.#database, input, intakeIds);
+      recordInboxDelivery(this.#database, input, intakeIds);
+      insertClarificationBoundary(this.#database, input, message, intakeIds);
+      return "CREATED" as const;
+    });
+
+    const persistedRow = queryMagicChatProtocol(this.#database, input.appId, input.cursor);
+    if (persistedRow === undefined) {
+      throw new Error("committed MagicChat intake has no durable protocol state");
+    }
+    const persisted = parseMagicChatProtocol(persistedRow);
+    return persisted.nextRequest === undefined
+      ? { outcome, snapshot: persisted.snapshot }
+      : { nextRequest: persisted.nextRequest, outcome, snapshot: persisted.snapshot };
   }
 
   #assertOpen(): void {

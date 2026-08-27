@@ -1,0 +1,92 @@
+{
+  "handoffVersion": "accord.r003-magicchat-handoff/v1",
+  "prerequisiteHandoffVersion": "accord.r003-core-handoff/v1",
+  "databaseSchemaVersion": 2,
+  "migrations": [
+    {
+      "version": 1,
+      "id": "001_r003_authority_core",
+      "file": "migrations/001_r003_authority_core.sql",
+      "sha256": "5bc684c4613fc5c8bb1abf4ec2fdd0f3d717fb0ea4b5e8b62771867d440e9cbe",
+      "schemaFingerprint": "943d8f01887669ea34c79d5b4931c0b258ad878198e3a879820e0da915641ddd"
+    },
+    {
+      "version": 2,
+      "id": "002_r003_magicchat_ingress",
+      "file": "migrations/002_r003_magicchat_ingress.sql",
+      "sha256": "ba1b9401fc89c11503acf482d467969bd2eb4d7687186a7fea316889895971d4",
+      "schemaFingerprint": "9343d71a7f0cf0f99091c2e6b3008c2f8863720f8231b5f21b4a64d4fc340d43"
+    }
+  ],
+  "contractVersions": {
+    "approval": "accord.approval/v1",
+    "auditEvent": "accord.audit-event/v1",
+    "board": "accord.board/v1",
+    "boardEntry": "accord.board-entry/v1",
+    "case": "accord.case/v1",
+    "inboxDelivery": "accord.inbox-delivery/v1",
+    "inboxReceipt": "accord.inbox-receipt/v1",
+    "pendingSideEffect": "accord.pending-side-effect/v1",
+    "responseClaim": "accord.response-claim/v1",
+    "runtimeInvocation": "accord.runtime-invocation/v1",
+    "workflowRun": "accord.workflow-run/v1",
+    "magicChatInboxState": "accord.magicchat-inbox-state/v1",
+    "magicChatMessage": "accord.magicchat-message/v1",
+    "magicChatRpcAction": "accord.magicchat-rpc-action/v1",
+    "waitChallenge": "accord.wait-challenge/v1"
+  },
+  "transactionAuthority": [
+    "cases",
+    "boards",
+    "workflow_runs",
+    "inbox_receipts",
+    "inbox_deliveries",
+    "board_entries",
+    "runtime_invocations",
+    "approvals",
+    "response_claims",
+    "pending_side_effects",
+    "audit_events",
+    "magicchat_inbox_states",
+    "wait_challenges",
+    "magicchat_rpc_actions",
+    "magicchat_messages"
+  ],
+  "magicChat": {
+    "sourceRepository": "chaitin/MagicChat",
+    "sourceCommit": "29dfa1c85377e69c3810e28b76a3f5580c3e198d",
+    "appWebSocketContract": "magicchat.app-websocket/29dfa1c85377e69c3810e28b76a3f5580c3e198d/v1",
+    "networkEnabled": false
+  },
+  "receiptIdentity": [
+    "app_id",
+    "cursor"
+  ],
+  "clarification": {
+    "challengeVersion": 1,
+    "expectedInputContract": "accord.clarification-answer/plain-text/v1",
+    "ttlMilliseconds": 86400000,
+    "requestIdentityParts": [
+      "case_id",
+      "workflow_run_id",
+      "challenge_version",
+      "CLARIFICATION"
+    ]
+  },
+  "cumulativeAck": {
+    "intentState": "ACK_INTENT",
+    "confirmedState": "ACK_CONFIRMED",
+    "lowerCursorGate": true
+  },
+  "downstreamHandoff": {
+    "consumerIssue": 12,
+    "sameCase": true,
+    "sameRun": true,
+    "workflowNode": "RESEARCHER"
+  },
+  "primarySeamClaims": {
+    "realMagicChatResourceCreated": false,
+    "scenarioS1Passed": false,
+    "scenarioS2Passed": false
+  }
+}

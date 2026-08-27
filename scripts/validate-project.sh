@@ -37,7 +37,9 @@ for required in \
   tsconfig.json \
   tsconfig.build.json \
   contracts/r003-core-handoff.json \
-  migrations/001_r003_authority_core.sql
+  contracts/r003-magicchat-handoff.json \
+  migrations/001_r003_authority_core.sql \
+  migrations/002_r003_magicchat_ingress.sql
 do
   [ -f "$required" ] && [ ! -L "$required" ] || fail "$required must be one regular, non-symlink file"
 done
@@ -233,11 +235,12 @@ run_node_restricted --test-isolation=none --test dist/test/contracts.test.js
 run_node_restricted --test-isolation=none --test dist/test/sqlite-startup.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
+run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 
 EXPECTED_HANDOFF=$(run_node_restricted -e \
-  'const fs=require("node:fs");process.stdout.write(`HANDOFF ${JSON.stringify(JSON.parse(fs.readFileSync("contracts/r003-core-handoff.json","utf8")))}`)')
+  'const fs=require("node:fs");process.stdout.write(`HANDOFF ${JSON.stringify(JSON.parse(fs.readFileSync("contracts/r003-magicchat-handoff.json","utf8")))}`)')
 ACTUAL_HANDOFF=$(run_node_restricted dist/src/handoff.js)
-[ "$ACTUAL_HANDOFF" = "$EXPECTED_HANDOFF" ] || fail "executable R003 contract/migration handoff changed"
+[ "$ACTUAL_HANDOFF" = "$EXPECTED_HANDOFF" ] || fail "executable R003 MagicChat contract/migration handoff changed"
 
 unset ACCORD_VALIDATION_SECRET_CANARY
 printf '%s\n' "$ACTUAL_HANDOFF"

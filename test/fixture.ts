@@ -19,6 +19,138 @@ export const SYNTHETIC_INTAKE = {
   receivedAt: "2026-08-26T00:00:00.000Z",
 } as const;
 
+export const LEGACY_MAGICCHAT_MESSAGE_CREATED_ENVELOPE = {
+  id: "event-delivery-1",
+  type: "event",
+  data: {
+    event: "message.created",
+    cursor: 1,
+    payload: {
+      conversation_id: "conversation-1",
+      message: {
+        id: "message-1",
+        sequence: 1,
+        sender: {
+          type: "user",
+          id: "actor-1",
+        },
+        body: {
+          type: "text",
+          content: "Synthetic objective",
+        },
+        created_at: "2026-08-26T00:00:00.000Z",
+      },
+    },
+  },
+} as const;
+
+interface MagicChatMessageCreatedOverrides {
+  readonly actorId?: string;
+  readonly body?: string;
+  readonly conversationId?: string;
+  readonly conversationName?: string;
+  readonly conversationType?: "app" | "group" | "topic";
+  readonly cursor?: number;
+  readonly envelopeEventId?: string;
+  readonly messageCreatedAt?: string;
+  readonly messageId?: string;
+  readonly messageSequence?: number;
+  readonly replyToMessageId?: string;
+}
+
+export function magicChatMessageCreatedEnvelope(overrides: MagicChatMessageCreatedOverrides = {}) {
+  const body = overrides.body ?? "Synthetic objective";
+  return {
+    v: 1,
+    id: overrides.envelopeEventId ?? "event-delivery-1",
+    kind: "event",
+    cursor: overrides.cursor ?? 1,
+    event: "message.created",
+    payload: {
+      conversation: {
+        id: overrides.conversationId ?? "conversation-1",
+        name: overrides.conversationName ?? "Synthetic App Conversation",
+        type: overrides.conversationType ?? "app",
+      },
+      sender: {
+        type: "user",
+        id: overrides.actorId ?? "actor-1",
+        name: "Synthetic User",
+        nickname: "Synthetic User",
+        email: "synthetic@example.invalid",
+      },
+      message: {
+        id: overrides.messageId ?? "message-1",
+        seq: overrides.messageSequence ?? 1,
+        body: {
+          type: "text",
+          content: body,
+        },
+        summary: body,
+        created_at: overrides.messageCreatedAt ?? "2026-08-26T00:00:00Z",
+        ...(overrides.replyToMessageId === undefined ? {} : { reply_to_message_id: overrides.replyToMessageId }),
+      },
+    },
+  } as const;
+}
+
+export const MAGICCHAT_MESSAGE_CREATED_ENVELOPE = magicChatMessageCreatedEnvelope();
+export const PINNED_MAGICCHAT_MESSAGE_CREATED_ENVELOPE = MAGICCHAT_MESSAGE_CREATED_ENVELOPE;
+
+interface MagicChatMessageSendSuccessOverrides {
+  readonly conversationId?: string;
+  readonly messageCreatedAt?: string;
+  readonly messageId?: string;
+  readonly messageSequence?: number;
+  readonly responseEnvelopeId?: string;
+  readonly senderAppId?: string;
+}
+
+export function magicChatMessageSendSuccessResponse(
+  requestEnvelopeId: string,
+  overrides: MagicChatMessageSendSuccessOverrides = {},
+) {
+  const prompt = "What decision constraint must the Researcher preserve?";
+  return {
+    v: 1,
+    id: overrides.responseEnvelopeId ?? "response-clarification-1",
+    kind: "response",
+    reply_to: requestEnvelopeId,
+    ok: true,
+    payload: {
+      conversation: {
+        id: overrides.conversationId ?? "conversation-1",
+        name: "Synthetic App Conversation",
+        type: "app",
+      },
+      created: true,
+      message: {
+        id: overrides.messageId ?? "clarification-message-1",
+        seq: overrides.messageSequence ?? 2,
+        body: { type: "text", content: prompt },
+        summary: prompt,
+        sender: { id: overrides.senderAppId ?? "synthetic-app", type: "app" },
+        created_at: overrides.messageCreatedAt ?? "2026-08-26T00:00:02Z",
+      },
+    },
+  } as const;
+}
+
+export function magicChatAckSuccessResponse(
+  requestEnvelopeId: string,
+  cursor: number,
+  responseEnvelopeId = `response-ack-${cursor}`,
+) {
+  return {
+    v: 1,
+    id: responseEnvelopeId,
+    kind: "response",
+    reply_to: requestEnvelopeId,
+    ok: true,
+    payload: { cursor },
+  } as const;
+}
+
 export const EXPECTED_INTAKE_AUTHORITY = {
   auditCorrelationId: "corr_5bdf4d0b9c7cf43d8b652a42614e1dbda90870192106a002d5a4ec4663ae89b6",
   auditEventId: "audit_a89f8af426f877ba61c31b2446c38d85619ad4bae804fafb43d8e0c12bb77bed",

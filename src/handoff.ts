@@ -1,3 +1,3 @@
-import { serializeR003CoreHandoff } from "./contracts/handoff.js";
+import { serializeR003MagicChatHandoff } from "./contracts/magicchat-handoff.js";
 
-console.log(serializeR003CoreHandoff());
+console.log(serializeR003MagicChatHandoff());
