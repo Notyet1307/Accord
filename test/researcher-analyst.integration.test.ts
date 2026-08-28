@@ -308,7 +308,7 @@ function assertMatrixArtifacts(database: DatabaseSync, prepared: PreparedProfile
     arrivals.push({ arrival_id: arrivalId, schema_version: "accord.runtime-result-arrival/v1", invocation_id: prepared.invocationId, attempt_id: attempt.attemptId, result_id: resultId, arrival_number: arrivalNumber, outcome: event.outcome, raw_response_json: capsule, raw_response_digest: wireDigest, recorded_at: event.receivedAt, response_id: responseId }); deliveryArrivals.push({ delivery_id: deliveryId, arrival_id: arrivalId });
     if (!results.has(resultId)) results.set(resultId, { result_id: resultId, schema_version: "accord.runtime-result/v1", invocation_id: prepared.invocationId, attempt_id: attempt.attemptId, provider_metadata_json: fixtureJson(parsed["providerMetadata"]), output_json: fixtureJson(output), output_digest: outputDigest, usage_json: fixtureJson(parsed["usage"]), first_received_at: event.receivedAt });
     const common = { arrivalId, attemptId: attempt.attemptId, boardRevision: prepared.boardRevision, contextDigest: prepared.contextDigest, modelId: prepared.modelId, node: prepared.profile, objectiveDigest: digest(prepared.objective), outcome: event.outcome, outputSchema: prepared.outputSchema, profileVersion: prepared.profileVersion, providerPortVersion: prepared.providerPortVersion, rawResponseDigest: wireDigest, runtimeVersion: prepared.runtimeVersion, selectedEntries: prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id })), workflowDefinitionId: "workflow_definition_r003_fixed_v1", workflowDefinitionVersion: "r003-fixed/v1", workflowRevision: prepared.workflowRevision };
-    const details = event.invalid ? { ...common, invalidReason: "INVALID_PROVIDER_RESULT", providerMetadata: parsed["providerMetadata"], usage: parsed["usage"] } : { ...common, outputDigest, providerMetadata: parsed["providerMetadata"], usage: parsed["usage"] };
+    const details = event.invalid ? { ...common, invalidReason: "INVALID_PROVIDER_RESULT", providerMetadata: parsed["providerMetadata"], providerReceivedAt: parsed["receivedAt"], usage: parsed["usage"] } : { ...common, outputDigest, providerMetadata: parsed["providerMetadata"], usage: parsed["usage"] };
     audits.push({ audit_event_id: deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId as never]) as string, schema_version: "accord.audit-event/v1", correlation_id: deriveRuntimeAuditCorrelationId(prepared.invocationId as never) as string, event_kind: `RUNTIME_RESULT:${event.outcome}:${attempt.attemptId}:${arrivalNumber}`, case_id: prepared.caseId, board_id: prepared.boardId, workflow_run_id: prepared.workflowRunId, receipt_id: null, details_json: fixtureJson(details), recorded_at: event.receivedAt });
   }
   const winner = events.find((event) => event.outcome === "WINNER"); const winningOutput = winner === undefined ? undefined : parseWire(winner.wire)["output"]; const board = winner === undefined ? [] : expectedResearcherBoardEntries(prepared, winningOutput); const winnerDigest = winner === undefined ? undefined : fixtureDigest(winningOutput); const winnerResultId = winnerDigest === undefined ? undefined : deriveRuntimeResultId({ invocationId: prepared.invocationId as never, attemptId: attempt.attemptId as never, outputDigest: winnerDigest }) as string;
@@ -628,6 +628,7 @@ test("invalid output preserves independently valid provider audit identity befor
       const invocation = authority.prepareProfileInvocation({ caseId: fixture.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:02.000Z", profile: "RESEARCHER" });
       const attempt = authority.beginPreparedAttempt(invocation.invocationId, "2026-08-26T00:01:02.000Z");
       const expectedMetadata = metadata(`invalid-output-${boundary}`, `invalid-output-${boundary}-response`);
+      const expectedProviderReceivedAt = "2026-08-26T00:01:03.000Z";
       const expectedUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
       const malformed = wire({ ...parseWire(researcherResult(invocation)), providerMetadata: expectedMetadata, output: { evidenceRefs: [], intents: [], observations: [] }, usage: expectedUsage });
       if (boundary === "pending Delivery") {
@@ -645,7 +646,10 @@ test("invalid output preserves independently valid provider audit identity befor
       const audit = JSON.parse(String(auditRow["details_json"])) as Record<string, unknown>;
       assert.deepEqual(JSON.parse(String(result["provider_metadata_json"])), expectedMetadata, boundary);
       assert.deepEqual(JSON.parse(String(result["usage_json"])), expectedUsage, boundary);
+      assert.equal(((JSON.parse(String(result["output_json"])) as Record<string, unknown>)["envelope"] as Record<string, unknown>)["providerReceivedAt"], expectedProviderReceivedAt, boundary);
+      assert.equal((JSON.parse(String(replay["replayable_response_json"])) as Record<string, unknown>)["providerReceivedAt"], expectedProviderReceivedAt, boundary);
       assert.deepEqual(audit["providerMetadata"], expectedMetadata, boundary);
+      assert.equal(audit["providerReceivedAt"], expectedProviderReceivedAt, boundary);
       assert.deepEqual(audit["usage"], expectedUsage, boundary);
       assert.equal(String(result["output_json"]).includes(expectedMetadata.requestId), false, boundary);
       assert.equal(String(replay["replayable_response_json"]).includes("evidenceRefs"), false, boundary);
