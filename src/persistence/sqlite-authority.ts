@@ -27,9 +27,19 @@ import {
   deriveIntakeBusinessIds,
   deriveMagicChatMessageRecordId,
   deriveObservationEntryId,
+  deriveRuntimeArrivalId,
+  deriveRuntimeAuditCorrelationId,
+  deriveRuntimeAuditEventId,
+  deriveRuntimeResponseId,
+  deriveRuntimeResultId,
+  deriveSourceId,
   deriveProtocolAuditEventId,
   deriveReceiptBusinessIds,
   parseAuditCorrelationId,
+  parseArrivalId,
+  parseAttemptId,
+  parseInvocationId,
+  parseResultId,
   parseAuditEventId,
   parseBoardEntryId,
   parseBoardId,
@@ -47,6 +57,7 @@ import {
   type InboxDeliveryId,
   type InboxReceiptId,
   type IntakeBusinessIds,
+  type InvocationId,
   type WorkflowRunId,
 } from "../core/ids.js";
 import type {
@@ -60,6 +71,28 @@ import type {
   MagicChatRequestEnvelope,
 } from "../magicchat/adapter.js";
 import { loadAuthorityMigrations, type AuthorityMigration } from "./migration.js";
+import {
+  beginPreparedAttempt,
+  commitProviderResult,
+  executePreparedAttempt,
+  reconcileLegacyRuntimeDeliveries,
+  sealLegacyDeliveryProvenance,
+  recoverOpaqueCompletionReceipts,
+  recoverReceivedRuntimeAttempts,
+  prepareProfileInvocation,
+  recordUnknownRuntimeArrival,
+  reconstructWinnerBoardEntries,
+  validateLegacyRuntimeDeliveryChronology,
+  validatePersistedRuntimeAuthorityGraph,
+  installTrustedSyntheticSourceManifest,
+  TRUSTED_SYNTHETIC_SOURCE_INPUT,
+  type PreparedAttempt,
+  type PreparedProfileInvocation,
+  type ProfileInvocationRequest,
+  type ProviderPort,
+  type ProviderWire,
+  type ProviderResultArbitration,
+} from "../researcher-analyst.js";
 import {
   parsePersistenceRow,
   requireHexDigest,
@@ -114,6 +147,19 @@ const REQUIRED_SCHEMA_OBJECTS = [
   "wait_challenges",
   "magicchat_rpc_actions",
   "magicchat_messages",
+  "profile_contexts",
+  "runtime_attempts",
+  "runtime_results",
+  "runtime_result_arrivals",
+  "approved_synthetic_sources",
+  "runtime_physical_responses",
+  "runtime_result_entries",
+  "approved_synthetic_source_manifests",
+  "runtime_provider_deliveries",
+  "runtime_delivery_arrivals",
+  "runtime_opaque_completion_receipts",
+  "runtime_provider_delivery_legacy_provenance",
+  "runtime_provider_delivery_legacy_provenance_gate",
 ] as const;
 
 export interface SqlitePragmaState {
@@ -296,28 +342,6 @@ function rollbackAfterFailure(database: DatabaseSync, error: unknown): never {
   throw error;
 }
 
-function applyMigration(database: DatabaseSync, migration: AuthorityMigration): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    database.exec(migration.sql);
-    const fingerprint = schemaFingerprint(database);
-    if (fingerprint !== migration.schemaFingerprint) {
-      throw new Error(`database schema drifted from ${migration.id} while applying the pinned migration`);
-    }
-    database
-      .prepare(
-        `INSERT INTO accord_schema_migrations (
-           version, migration_id, migration_sha256, schema_fingerprint, applied_at
-         ) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(migration.version, migration.id, migration.sha256, migration.schemaFingerprint, new Date().toISOString());
-    database.exec(`PRAGMA user_version = ${migration.version}`);
-    database.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterFailure(database, error);
-  }
-}
-
 function validateWorkflowDefinition(database: DatabaseSync): void {
   const value = database
     .prepare(
@@ -403,14 +427,267 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
     }
     validateAppliedSchema(database, migrations.slice(0, appliedIndex + 1));
   }
-  for (const migration of migrations) {
-    if (migration.version > version) {
-      applyMigration(database, migration);
+  const pending = migrations.filter((migration) => migration.version > version);
+  if (pending.length > 0) {
+    /* A populated legacy authority must never be left half-upgraded. */
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      if (version === 7) validateLegacyRuntimeDeliveryChronology(database);
+      for (const migration of pending) {
+        database.exec(migration.sql);
+        if (schemaFingerprint(database) !== migration.schemaFingerprint) throw new Error(`database schema drifted from ${migration.id} while applying the pinned migration`);
+        database.prepare(`INSERT INTO accord_schema_migrations (version, migration_id, migration_sha256, schema_fingerprint, applied_at) VALUES (?, ?, ?, ?, ?)`)
+          .run(migration.version, migration.id, migration.sha256, migration.schemaFingerprint, new Date().toISOString());
+        database.exec(`PRAGMA user_version = ${migration.version}`);
+      }
+      /* v3/v4 values are authority data, so all reconciliation and recovery
+       * complete before the schema transaction becomes visible. */
+      /* A pre-sealed row is historical authority, not a hint.  Validate it
+       * before any reconciliation can make the failed open observable. */
+      validateLegacyRuntimeReconciliationIfSealed(database);
+      reconcileLegacySourceManifest(database);
+      backfillLegacyRuntimeResults(database);
+      reconcileLegacyRuntimeDeliveries(database);
+      sealLegacyRuntimeReconciliation(database);
+      validateLegacyRuntimeReconciliation(database);
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+      recoverOpaqueCompletionReceipts(database);
+      recoverReceivedRuntimeAttempts(database);
+      reconcileInterruptedRuntimeAttempts(database);
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+      checkDatabaseHealth(database);
+      database.exec("COMMIT");
+    } catch (error) {
+      rollbackAfterFailure(database, error);
     }
   }
   validateAppliedSchema(database, migrations);
   checkDatabaseHealth(database);
-  validatePersistedAuthorityState(database);
+  validateLegacyRuntimeReconciliation(database);
+  if (pending.length === 0) {
+    /* Current-schema recovery is all-or-nothing too: every opaque authority
+     * must validate before a later malformed or superseding row can leave an
+     * earlier recovery observable. */
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+      recoverOpaqueCompletionReceipts(database);
+      recoverReceivedRuntimeAttempts(database);
+      reconcileInterruptedRuntimeAttempts(database);
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+      database.exec("COMMIT");
+    } catch (error) {
+      rollbackAfterFailure(database, error);
+    }
+  }
+}
+
+/** v3 stored complete frozen source snapshots in Contexts; seal that exact set once. */
+function reconcileLegacySourceManifest(database: DatabaseSync): void {
+  const header = database.prepare("SELECT state FROM approved_synthetic_source_manifests WHERE manifest_id = 'source_manifest_r003_v1'").get() as Record<string, unknown> | undefined;
+  if (header?.["state"] !== "OPEN") return;
+  const contexts = database.prepare("SELECT context_id, node_id, approved_sources_json FROM profile_contexts ORDER BY context_id").all() as readonly Record<string, unknown>[];
+  const trusted = TRUSTED_SYNTHETIC_SOURCE_INPUT;
+  const trustedId = deriveSourceId({ contentDigest: createHash("sha256").update(JSON.stringify(trusted.content), "utf8").digest("hex"), locator: trusted.locator, observedAt: trusted.observedAt, sourceKind: trusted.sourceKind });
+  for (const context of contexts) {
+    const row = parsePersistenceRow(context, "legacy source context");
+    let sources: unknown;
+    try { sources = JSON.parse(requireString(row, "approved_sources_json")); } catch { throw new Error("legacy Profile source context is not valid JSON"); }
+    if (!Array.isArray(sources)) throw new Error("legacy Profile source context is not an array");
+    if (row["node_id"] === "ANALYST") {
+      if (sources.length !== 0) throw new Error("legacy Analyst context must contain no approved sources");
+      continue;
+    }
+    if (row["node_id"] !== "RESEARCHER" || sources.length !== 1) throw new Error("legacy Researcher context must contain exactly the trusted manifest source");
+    const source = parsePersistenceRow(sources[0], "legacy approved source");
+    const keys = Object.keys(source).sort();
+    if (keys.length !== 5 || keys.some((key, index) => key !== ["content", "locator", "observedAt", "sourceId", "sourceKind"][index])) throw new Error("legacy Researcher source has an unsupported field");
+    if (requireString(source, "sourceId") !== trustedId || requireString(source, "content") !== trusted.content || requireString(source, "locator") !== trusted.locator || requireString(source, "observedAt") !== trusted.observedAt || requireString(source, "sourceKind") !== trusted.sourceKind) throw new Error("legacy Researcher source does not exactly match the trusted manifest");
+  }
+  installTrustedSyntheticSourceManifest(database, "2026-08-26T00:01:00.000Z");
+}
+
+function exactLegacyWinnerEntries(database: DatabaseSync, invocationId: InvocationId, caseId: CaseId, boardId: BoardId, revision: number, outputJson: string, createdAt: string): readonly string[] {
+  let output: unknown;
+  try { output = JSON.parse(outputJson); } catch { throw new Error("legacy runtime Result output is not valid JSON"); }
+  const expected = reconstructWinnerBoardEntries(database, invocationId, output);
+  const actual = database.prepare(`SELECT board_entry_id, schema_version, board_id, case_id, entry_type, status, author_type, author_id,
+      payload_json, source_refs_json, based_on_json, contradicts_json, supersedes_json, visibility, trust_level,
+      instruction_authority, created_revision, content_digest, created_at
+    FROM board_entries WHERE case_id = ? AND board_id = ? AND created_revision = ? ORDER BY board_entry_id`).all(caseId, boardId, revision) as readonly Record<string, unknown>[];
+  if (actual.length !== expected.length) throw new Error("legacy runtime Result Board revision has an extra or missing entry");
+  const byId = new Map(actual.map((row) => [String(row["board_entry_id"]), row]));
+  for (const entry of expected) {
+    const row = byId.get(entry.entryId);
+    if (row === undefined) throw new Error("legacy runtime Result Board entries do not exactly reconstruct from its winner output");
+    const persisted = parsePersistenceRow(row, "legacy runtime Board entry");
+    const immutable = {
+      authorId: requireString(persisted, "author_id"), authorType: requireString(persisted, "author_type"), basedOn: JSON.parse(requireString(persisted, "based_on_json")),
+      contradicts: JSON.parse(requireString(persisted, "contradicts_json")), entryType: requireString(persisted, "entry_type"), instructionAuthority: requireString(persisted, "instruction_authority"),
+      payload: JSON.parse(requireString(persisted, "payload_json")), sourceRefs: JSON.parse(requireString(persisted, "source_refs_json")), status: requireString(persisted, "status"),
+      supersedes: JSON.parse(requireString(persisted, "supersedes_json")), trustLevel: requireString(persisted, "trust_level"), visibility: requireString(persisted, "visibility"),
+    };
+    const recomputedDigest = createHash("sha256").update(JSON.stringify(canonicalJson(immutable)), "utf8").digest("hex");
+    const expectedImmutable = { authorId: entry.authorId, authorType: entry.authorType, basedOn: entry.basedOn, contradicts: entry.contradicts, entryType: entry.type, instructionAuthority: entry.instructionAuthority, payload: entry.payload, sourceRefs: entry.sourceRefs, status: entry.status, supersedes: entry.supersedes, trustLevel: entry.trustLevel, visibility: entry.visibility };
+    if (
+      requireString(persisted, "board_entry_id") !== entry.entryId || requireString(persisted, "schema_version") !== entry.schemaVersion || requireString(persisted, "board_id") !== boardId || requireString(persisted, "case_id") !== caseId ||
+      requireInteger(persisted, "created_revision") !== revision || requireIsoInstant(persisted, "created_at") !== createdAt || requireHexDigest(persisted, "content_digest") !== recomputedDigest || recomputedDigest !== entry.contentDigest ||
+      JSON.stringify(canonicalJson(immutable)) !== JSON.stringify(canonicalJson(expectedImmutable))
+    ) throw new Error("legacy runtime Result Board entries do not exactly reconstruct from its winner output");
+  }
+  return Object.freeze(expected.map((entry) => entry.entryId));
+}
+
+/**
+ * v3 persisted logical Results but had no physical receipt, Arrival, or
+ * result-to-entry link tables.  Backfill only an already committed, exactly
+ * derivable winner; every other shape is rejected while the upgrade is open.
+ */
+function backfillLegacyRuntimeResults(database: DatabaseSync): void {
+  const legacy = database.prepare(`SELECT r.result_id, r.invocation_id, r.attempt_id, r.output_json, r.output_digest, r.first_received_at,
+      i.case_id, i.board_id, i.workflow_run_id, i.board_revision, i.status, a.state AS attempt_state
+    FROM runtime_results r
+    JOIN runtime_invocations i ON i.invocation_id = r.invocation_id
+    JOIN runtime_attempts a ON a.attempt_id = r.attempt_id AND a.invocation_id = r.invocation_id
+    WHERE NOT EXISTS (SELECT 1 FROM runtime_result_arrivals arrival WHERE arrival.result_id = r.result_id)
+    ORDER BY r.result_id`).all() as readonly Record<string, unknown>[];
+  for (const raw of legacy) {
+    const row = parsePersistenceRow(raw, "legacy runtime Result");
+    const invocationId = parseInvocationId(requireString(row, "invocation_id"));
+    const attemptId = parseAttemptId(requireString(row, "attempt_id"));
+    const resultId = parseResultId(requireString(row, "result_id"));
+    const outputDigest = requireHexDigest(row, "output_digest");
+    if (resultId !== deriveRuntimeResultId({ invocationId, attemptId, outputDigest }) || row["status"] !== "RESULT_COMMITTED" || row["attempt_state"] !== "WINNER") throw new Error("legacy runtime Result cannot be reconciled as one committed winner");
+    const existingWinner = database.prepare("SELECT 1 AS present FROM runtime_result_arrivals WHERE invocation_id = ? AND outcome = 'WINNER'").get(invocationId);
+    if (existingWinner !== undefined) throw new Error("legacy runtime Result has an ambiguous winner");
+    const caseId = parseCaseId(row["case_id"]); const boardId = parseBoardId(row["board_id"]); const workflowRunId = parseWorkflowRunId(row["workflow_run_id"]);
+    const receivedAt = requireIsoInstant(row, "first_received_at");
+    let persistedOutput: unknown;
+    try { persistedOutput = JSON.parse(requireString(row, "output_json")); } catch { throw new Error("legacy runtime Result output is not valid JSON"); }
+    if (outputDigest !== createHash("sha256").update(JSON.stringify(canonicalJson(persistedOutput)), "utf8").digest("hex")) throw new Error("legacy runtime Result output digest is inconsistent");
+    const boardEntries = exactLegacyWinnerEntries(database, invocationId, caseId, boardId, requireInteger(row, "board_revision") + 1, requireString(row, "output_json"), receivedAt);
+    if (database.prepare("SELECT 1 AS present FROM runtime_result_entries WHERE result_id = ?").get(resultId) !== undefined) throw new Error("legacy runtime Result already has an untrusted Board-entry link");
+    const rawDigest = createHash("sha256").update(`accord.r003/legacy-response-backfill/v1\\0${resultId}`, "utf8").digest("hex");
+    const responseId = deriveRuntimeResponseId({ invocationId, attemptId, envelopeDigest: rawDigest });
+    const rawResponse = JSON.stringify({ envelope: { kind: "legacy-runtime-result-backfill/v1" }, envelopeDigest: rawDigest, kind: "provider-response-redacted", validationErrors: [] });
+    database.prepare(`INSERT INTO runtime_physical_responses (response_id, schema_version, invocation_id, attempt_id, envelope_digest, redacted_envelope_json, trusted_received_at, provider_received_at, replayable_response_json)
+      VALUES (?, 'accord.runtime-physical-response/v1', ?, ?, ?, ?, ?, NULL, '{}')`).run(responseId, invocationId, attemptId, rawDigest, rawResponse, receivedAt);
+    const arrivalId = deriveRuntimeArrivalId({ invocationId, attemptId, arrivalNumber: 1 });
+    database.prepare(`INSERT INTO runtime_result_arrivals (arrival_id, schema_version, invocation_id, attempt_id, result_id, arrival_number, outcome, raw_response_json, raw_response_digest, recorded_at, response_id)
+      VALUES (?, 'accord.runtime-result-arrival/v1', ?, ?, ?, 1, 'WINNER', ?, ?, ?, ?)`).run(arrivalId, invocationId, attemptId, resultId, rawResponse, rawDigest, receivedAt, responseId);
+    for (const entryId of boardEntries) database.prepare("INSERT INTO runtime_result_entries (result_id, board_entry_id) VALUES (?, ?)").run(resultId, entryId);
+    database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at)
+      VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)`).run(String(deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId])), String(deriveRuntimeAuditCorrelationId(invocationId)), `RUNTIME_RESULT:WINNER:${attemptId}:1`, caseId, boardId, workflowRunId, JSON.stringify({ arrivalId, attemptId, outcome: "WINNER", recoveredFromSchema: 3, resultId }), receivedAt);
+  }
+
+  /* v3 already recorded immutable arrivals.  Link each non-UNKNOWN arrival
+   * to its deterministic physical response without changing any historical
+   * identity, payload, result, or audit field. */
+  const unlinkedArrivals = database.prepare(`SELECT a.arrival_id, a.attempt_id, a.invocation_id, a.result_id, a.arrival_number, r.output_json, r.first_received_at,
+      a.outcome, a.raw_response_json, a.raw_response_digest, a.recorded_at,
+      i.case_id, i.board_id, i.workflow_run_id, i.board_revision
+    FROM runtime_result_arrivals a
+    JOIN runtime_invocations i ON i.invocation_id = a.invocation_id
+    JOIN runtime_results r ON r.result_id = a.result_id AND r.invocation_id = a.invocation_id AND r.attempt_id = a.attempt_id
+    WHERE a.outcome <> 'UNKNOWN' AND a.response_id IS NULL
+    ORDER BY a.arrival_id`).all() as readonly Record<string, unknown>[];
+  for (const raw of unlinkedArrivals) {
+    const row = parsePersistenceRow(raw, "legacy runtime Arrival");
+    const arrivalId = parseArrivalId(requireString(row, "arrival_id"));
+    const invocationId = parseInvocationId(requireString(row, "invocation_id"));
+    const attemptId = parseAttemptId(requireString(row, "attempt_id"));
+    const resultId = parseResultId(requireString(row, "result_id"));
+    const arrivalNumber = requireInteger(row, "arrival_number");
+    const rawResponseDigest = requireHexDigest(row, "raw_response_digest");
+    const rawResponseJson = requireString(row, "raw_response_json");
+    const recordedAt = requireIsoInstant(row, "recorded_at");
+    let envelope: unknown;
+    try { envelope = JSON.parse(rawResponseJson); } catch { throw new Error("legacy runtime Arrival response is not valid JSON"); }
+    if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope) || Reflect.get(envelope, "envelopeDigest") !== rawResponseDigest) throw new Error("legacy runtime Arrival response digest is inconsistent");
+    const result = database.prepare("SELECT output_digest FROM runtime_results WHERE result_id = ? AND invocation_id = ? AND attempt_id = ?").get(resultId, invocationId, attemptId) as Record<string, unknown> | undefined;
+    if (result === undefined || resultId !== deriveRuntimeResultId({ invocationId, attemptId, outputDigest: requireHexDigest(result, "output_digest") })) throw new Error("legacy runtime Arrival Result identity is invalid");
+    const responseId = deriveRuntimeResponseId({ invocationId, attemptId, envelopeDigest: rawResponseDigest });
+    const response = database.prepare("SELECT invocation_id, attempt_id, envelope_digest FROM runtime_physical_responses WHERE response_id = ?").get(responseId) as Record<string, unknown> | undefined;
+    if (response === undefined) {
+      database.prepare(`INSERT INTO runtime_physical_responses (response_id, schema_version, invocation_id, attempt_id, envelope_digest, redacted_envelope_json, trusted_received_at, provider_received_at, replayable_response_json)
+        VALUES (?, 'accord.runtime-physical-response/v1', ?, ?, ?, ?, ?, NULL, '{}')`).run(responseId, invocationId, attemptId, rawResponseDigest, rawResponseJson, recordedAt);
+    } else if (response["invocation_id"] !== invocationId || response["attempt_id"] !== attemptId || response["envelope_digest"] !== rawResponseDigest) {
+      throw new Error("legacy runtime Arrival physical Response is inconsistent");
+    }
+    database.prepare("UPDATE runtime_result_arrivals SET response_id = ? WHERE arrival_id = ? AND response_id IS NULL").run(responseId, arrivalId);
+    if (row["outcome"] !== "WINNER") continue;
+    const caseId = parseCaseId(row["case_id"]); const boardId = parseBoardId(row["board_id"]); const workflowRunId = parseWorkflowRunId(row["workflow_run_id"]);
+    const boardEntries = exactLegacyWinnerEntries(database, invocationId, caseId, boardId, requireInteger(row, "board_revision") + 1, requireString(row, "output_json"), requireIsoInstant(row, "first_received_at"));
+    if (database.prepare("SELECT 1 AS present FROM runtime_result_entries WHERE result_id = ?").get(resultId) !== undefined) throw new Error("legacy runtime Arrival already has an untrusted Board-entry link");
+    for (const entryId of boardEntries) database.prepare("INSERT OR IGNORE INTO runtime_result_entries (result_id, board_entry_id) VALUES (?, ?)").run(resultId, entryId);
+    const auditEventId = deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]);
+    const audit = database.prepare("SELECT correlation_id, event_kind FROM audit_events WHERE audit_event_id = ?").get(auditEventId) as Record<string, unknown> | undefined;
+    const eventKind = `RUNTIME_RESULT:WINNER:${attemptId}:${arrivalNumber}`;
+    if (audit === undefined) {
+      database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at)
+        VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)`).run(auditEventId, deriveRuntimeAuditCorrelationId(invocationId), eventKind, caseId, boardId, workflowRunId, JSON.stringify({ arrivalId, attemptId, outcome: "WINNER", recoveredFromSchema: 3, resultId }), recordedAt);
+    } else if (audit["correlation_id"] !== deriveRuntimeAuditCorrelationId(invocationId) || audit["event_kind"] !== eventKind) {
+      throw new Error("legacy runtime Arrival winner audit is inconsistent");
+    }
+  }
+}
+
+function sealLegacyRuntimeReconciliation(database: DatabaseSync): void {
+  const row = database.prepare("SELECT state, sealed_at FROM runtime_legacy_reconciliation WHERE reconciliation_id = 'runtime_legacy_reconciliation_r003_v1'").get() as Record<string, unknown> | undefined;
+  if (row?.["state"] === "SEALED") { sealLegacyDeliveryProvenance(database); validateLegacyRuntimeReconciliation(database); return; }
+  if (row?.["state"] !== "OPEN") throw new Error("legacy runtime reconciliation has an invalid migration state");
+  if (database.prepare("UPDATE runtime_legacy_reconciliation SET state = 'SEALED', sealed_at = ? WHERE reconciliation_id = 'runtime_legacy_reconciliation_r003_v1' AND state = 'OPEN'").run(new Date().toISOString()).changes !== 1) {
+    throw new Error("legacy runtime reconciliation could not be sealed exactly once");
+  }
+  sealLegacyDeliveryProvenance(database);
+}
+
+function validateLegacyRuntimeReconciliation(database: DatabaseSync): void {
+  const row = database.prepare("SELECT state, sealed_at FROM runtime_legacy_reconciliation WHERE reconciliation_id = 'runtime_legacy_reconciliation_r003_v1'").get() as Record<string, unknown> | undefined;
+  if (row === undefined || row["state"] !== "SEALED" || typeof row["sealed_at"] !== "string") throw new Error("legacy runtime reconciliation is not sealed");
+  requireIsoInstant(row, "sealed_at");
+}
+
+function validateLegacyRuntimeReconciliationIfSealed(database: DatabaseSync): void {
+  const row = database.prepare("SELECT state FROM runtime_legacy_reconciliation WHERE reconciliation_id = 'runtime_legacy_reconciliation_r003_v1'").get() as Record<string, unknown> | undefined;
+  if (row?.["state"] === "SEALED") validateLegacyRuntimeReconciliation(database);
+}
+
+function reconcileInterruptedRuntimeAttempts(database: DatabaseSync): void {
+  const interrupted = database.prepare(`SELECT a.attempt_id, a.invocation_id, i.case_id, i.board_id, i.workflow_run_id, i.node_id, i.workflow_revision, i.board_revision, i.context_digest
+    FROM runtime_attempts a JOIN runtime_invocations i ON i.invocation_id = a.invocation_id
+    WHERE a.state = 'RUNNING' ORDER BY a.attempt_id`).all() as readonly Record<string, unknown>[];
+  if (interrupted.length === 0) return;
+  const recoveredAt = new Date().toISOString();
+  runTransaction(database, () => {
+    for (const raw of interrupted) {
+      const row = parsePersistenceRow(raw, "interrupted Runtime Attempt");
+      const attemptId = parseAttemptId(requireString(row, "attempt_id"));
+      const invocationId = parseInvocationId(requireString(row, "invocation_id"));
+      const caseId = parseCaseId(row["case_id"]);
+      const boardId = parseBoardId(row["board_id"]);
+      const workflowRunId = parseWorkflowRunId(row["workflow_run_id"]);
+      const nodeId = requireString(row, "node_id");
+      const workflowRevision = requireInteger(row, "workflow_revision");
+      const boardRevision = requireInteger(row, "board_revision");
+      const contextDigest = requireString(row, "context_digest");
+      const count = database.prepare("SELECT count(*) AS count FROM runtime_attempts WHERE invocation_id = ?").get(invocationId) as Record<string, unknown>;
+      const exhausted = count["count"] === 2;
+      const attemptUpdate = database.prepare("UPDATE runtime_attempts SET state = 'UNKNOWN', finished_at = ? WHERE attempt_id = ? AND state = 'RUNNING'").run(recoveredAt, attemptId);
+      const invocationUpdate = database.prepare("UPDATE runtime_invocations SET status = 'UNKNOWN' WHERE invocation_id = ? AND status = 'RUNNING'").run(invocationId);
+      if (attemptUpdate.changes !== 1 || invocationUpdate.changes !== 1) throw new Error("interrupted Runtime recovery lost its paired Invocation/Attempt compare-and-set");
+      recordUnknownRuntimeArrival(database, { invocationId, attemptId, caseId, boardId, workflowRunId, recordedAt: recoveredAt, eventKind: exhausted ? "RUNTIME_ATTEMPT_RECOVERED_UNKNOWN_EXHAUSTED" : "RUNTIME_ATTEMPT_RECOVERED_UNKNOWN", details: { operatorDecisionRequired: exhausted, recovery: "startup" } });
+      if (exhausted) {
+        database.prepare("UPDATE runtime_invocations SET status = 'FAILED' WHERE invocation_id = ? AND status <> 'RESULT_COMMITTED'").run(invocationId);
+        const fresh = database.prepare("SELECT 1 AS present FROM runtime_invocations i JOIN workflow_runs w ON w.workflow_run_id = i.workflow_run_id JOIN boards b ON b.board_id = i.board_id JOIN cases c ON c.case_id = i.case_id WHERE i.invocation_id = ? AND i.workflow_revision = ? AND i.board_revision = ? AND i.context_digest = ? AND w.state = ? AND w.revision = ? AND b.revision = ? AND c.status = 'OPEN'").get(invocationId, workflowRevision, boardRevision, contextDigest, nodeId, workflowRevision, boardRevision) as Record<string, unknown> | undefined;
+        if (fresh !== undefined) { database.prepare("UPDATE workflow_runs SET state = 'FAILED', revision = revision + 1 WHERE workflow_run_id = ? AND state = ? AND revision = ?").run(workflowRunId, nodeId, workflowRevision); database.prepare("UPDATE cases SET status = 'FAILED' WHERE case_id = ? AND status = 'OPEN'").run(caseId); }
+      }
+    }
+  });
 }
 
 function validatePersistedAuthorityState(database: DatabaseSync): void {
@@ -539,6 +816,43 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
     }
   }
   validatePersistedClarificationObservations(database);
+  validatePersistedAgentBoardGraph(database);
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalJson(Reflect.get(value, key))]));
+  return value;
+}
+
+function boardEntryDigest(row: PersistenceRow): string {
+  const parse = (column: string): unknown => {
+    try { return JSON.parse(requireString(row, column)); } catch { throw new Error(`persisted authority integrity failed: Agent Board entry ${column} is invalid JSON`); }
+  };
+  const immutable = {
+    authorId: requireString(row, "author_id"), authorType: requireString(row, "author_type"), basedOn: parse("based_on_json"),
+    contradicts: parse("contradicts_json"), entryType: requireString(row, "entry_type"), instructionAuthority: requireString(row, "instruction_authority"),
+    payload: parse("payload_json"), sourceRefs: parse("source_refs_json"), status: requireString(row, "status"),
+    supersedes: parse("supersedes_json"), trustLevel: requireString(row, "trust_level"), visibility: requireString(row, "visibility"),
+  };
+  return createHash("sha256").update(JSON.stringify(canonicalJson(immutable)), "utf8").digest("hex");
+}
+
+function validatePersistedAgentBoardGraph(database: DatabaseSync): void {
+  const entries = database.prepare(`SELECT board_entry_id, board_id, case_id, entry_type, status, author_type, author_id, payload_json,
+    source_refs_json, based_on_json, contradicts_json, supersedes_json, visibility, trust_level, instruction_authority, created_revision, content_digest
+    FROM board_entries WHERE author_type = 'AGENT' ORDER BY board_entry_id`).all();
+  for (const [index, raw] of entries.entries()) {
+    const row = parsePersistenceRow(raw, `Agent Board entry ${index}`);
+    if (requireHexDigest(row, "content_digest") !== boardEntryDigest(row)) throw new Error("persisted authority integrity failed: Agent Board entry digest drifted");
+    const boardId = requireString(row, "board_id"); const caseId = requireString(row, "case_id");
+    const board = database.prepare("SELECT revision FROM boards WHERE board_id = ? AND case_id = ?").get(boardId, caseId);
+    if (board === undefined || requireInteger(row, "created_revision") > requireInteger(parsePersistenceRow(board, "Agent Board entry board"), "revision")) throw new Error("persisted authority integrity failed: Agent Board entry revision is invalid");
+    for (const relationColumn of ["based_on_json", "contradicts_json", "supersedes_json"] as const) {
+      let ids: unknown; try { ids = JSON.parse(requireString(row, relationColumn)); } catch { throw new Error("persisted authority integrity failed: Agent Board relation JSON is invalid"); }
+      if (!Array.isArray(ids) || ids.some((entryId) => typeof entryId !== "string" || database.prepare("SELECT 1 FROM board_entries WHERE board_entry_id = ? AND board_id = ? AND case_id = ?").get(entryId, boardId, caseId) === undefined)) throw new Error("persisted authority integrity failed: Agent Board relation leaves its Case graph");
+    }
+  }
 }
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
@@ -3161,13 +3475,20 @@ function insertIntakeGraph(database: DatabaseSync, input: NormalizedSyntheticInt
     );
 }
 
+let authoritySavepointSequence = 0;
 function runTransaction<Result>(database: DatabaseSync, operation: () => Result): Result {
-  database.exec("BEGIN IMMEDIATE");
+  const nested = (database as unknown as { readonly isTransaction?: boolean }).isTransaction === true;
+  const savepoint = `authority_${authoritySavepointSequence += 1}`;
+  database.exec(nested ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
   try {
     const result = operation();
-    database.exec("COMMIT");
+    database.exec(nested ? `RELEASE ${savepoint}` : "COMMIT");
     return result;
   } catch (error) {
+    if (nested) {
+      try { database.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`); } catch (rollbackError) { throw new AggregateError([error, rollbackError], "SQLite transaction and rollback both failed"); }
+      throw error;
+    }
     rollbackAfterFailure(database, error);
   }
 }
@@ -3240,6 +3561,11 @@ export class AuthorityDatabase {
   public readPragmas(): SqlitePragmaState {
     this.#assertOpen();
     return configureAndReadPragmas(this.#database);
+  }
+
+  public installTrustedSyntheticSourceManifest(installedAt: string) {
+    this.#assertOpen();
+    return installTrustedSyntheticSourceManifest(this.#database, installedAt);
   }
 
   public inspectSyntheticIntake(appId: unknown, cursor: unknown): PersistedIntakeAuthority | undefined {
@@ -3317,6 +3643,42 @@ export class AuthorityDatabase {
         : [Object.freeze({ cursor: parsed.snapshot.cursor, request: parsed.nextRequest })];
     });
     return Object.freeze(pending);
+  }
+
+  /**
+   * Persists the exact, least-privilege Profile context and its first READY
+   * Attempt. This method performs no provider I/O.
+   */
+  public prepareProfileInvocation(input: ProfileInvocationRequest): PreparedProfileInvocation {
+    this.#assertOpen();
+    return prepareProfileInvocation(this.#database, input);
+  }
+
+  /** Atomically claims one persisted Attempt; callers invoke a port only after this returns. */
+  public beginPreparedAttempt(invocationId: InvocationId, now: string): PreparedAttempt {
+    this.#assertOpen();
+    return beginPreparedAttempt(this.#database, invocationId, now);
+  }
+
+  /** Stores and arbitrates a provider response; only the fresh schema-valid response can append Board entries. */
+  public commitProviderResult(
+    invocation: PreparedProfileInvocation,
+    attempt: PreparedAttempt,
+    result: ProviderWire,
+    recoveredTrustedReceivedAt?: string,
+  ): ProviderResultArbitration {
+    this.#assertOpen();
+    return commitProviderResult(this.#database, invocation, attempt, result, recoveredTrustedReceivedAt);
+  }
+
+  /** Executes exactly one provider-port call. SDK retry and fallback are intentionally absent. */
+  public executePreparedAttempt(
+    invocation: PreparedProfileInvocation,
+    port: ProviderPort,
+    now: string,
+  ): Promise<ProviderResultArbitration> {
+    this.#assertOpen();
+    return executePreparedAttempt(this.#database, invocation, port, now);
   }
 
   public processMagicChatEnvelope(

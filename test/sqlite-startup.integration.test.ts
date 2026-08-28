@@ -36,11 +36,22 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_magicchat_inbox_app_cursor",
   "index:idx_magicchat_rpc_request",
   "index:idx_pending_side_effects_state",
+  "index:idx_profile_contexts_run_node",
+  "index:idx_runtime_attempts_invocation",
+  "index:idx_runtime_delivery_arrivals_arrival",
   "index:idx_runtime_invocations_run_status",
+  "index:idx_runtime_opaque_completion_receipts_attempt",
+  "index:idx_runtime_physical_responses_attempt",
+  "index:idx_runtime_provider_deliveries_attempt",
+  "index:idx_runtime_result_arrivals_invocation",
+  "index:idx_runtime_result_entries_result",
+  "index:idx_runtime_results_invocation",
   "index:idx_wait_challenges_active_app",
   "index:idx_wait_challenges_run_version",
   "table:accord_schema_migrations",
   "table:approvals",
+  "table:approved_synthetic_source_manifests",
+  "table:approved_synthetic_sources",
   "table:audit_events",
   "table:board_entries",
   "table:boards",
@@ -51,14 +62,58 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "table:magicchat_messages",
   "table:magicchat_rpc_actions",
   "table:pending_side_effects",
+  "table:profile_contexts",
   "table:response_claims",
+  "table:runtime_attempts",
+  "table:runtime_delivery_arrivals",
   "table:runtime_invocations",
+  "table:runtime_legacy_reconciliation",
+  "table:runtime_opaque_completion_receipts",
+  "table:runtime_physical_responses",
+  "table:runtime_provider_deliveries",
+  "table:runtime_provider_delivery_legacy_provenance",
+  "table:runtime_provider_delivery_legacy_provenance_gate",
+  "table:runtime_result_arrivals",
+  "table:runtime_result_entries",
+  "table:runtime_results",
   "table:wait_challenges",
   "table:workflow_definitions",
   "table:workflow_runs",
+  "trigger:approved_synthetic_source_manifest_no_delete",
+  "trigger:approved_synthetic_source_manifest_sealed_update",
+  "trigger:approved_synthetic_sources_immutable_delete",
+  "trigger:approved_synthetic_sources_immutable_update",
+  "trigger:board_entries_immutable_delete",
+  "trigger:board_entries_immutable_update",
   "trigger:inbox_deliveries_immutable_collision",
   "trigger:inbox_deliveries_immutable_delete",
   "trigger:inbox_deliveries_immutable_update",
+  "trigger:profile_contexts_immutable_delete",
+  "trigger:profile_contexts_immutable_update",
+  "trigger:runtime_delivery_arrivals_immutable_delete",
+  "trigger:runtime_delivery_arrivals_immutable_update",
+  "trigger:runtime_legacy_reconciliation_immutable_update",
+  "trigger:runtime_legacy_reconciliation_no_delete",
+  "trigger:runtime_opaque_completion_receipts_guarded_delete",
+  "trigger:runtime_opaque_completion_receipts_immutable_update",
+  "trigger:runtime_physical_responses_immutable_delete",
+  "trigger:runtime_physical_responses_immutable_update",
+  "trigger:runtime_provider_deliveries_immutable_delete",
+  "trigger:runtime_provider_deliveries_immutable_update",
+  "trigger:runtime_provider_deliveries_v1_provenance_window",
+  "trigger:runtime_provider_deliveries_v2_original_binding",
+  "trigger:runtime_provider_delivery_legacy_provenance_gate_insert_once",
+  "trigger:runtime_provider_delivery_legacy_provenance_gate_no_delete",
+  "trigger:runtime_provider_delivery_legacy_provenance_gate_transition",
+  "trigger:runtime_provider_delivery_legacy_provenance_immutable_delete",
+  "trigger:runtime_provider_delivery_legacy_provenance_immutable_update",
+  "trigger:runtime_provider_delivery_legacy_provenance_insert_open",
+  "trigger:runtime_result_arrivals_immutable_delete",
+  "trigger:runtime_result_arrivals_immutable_update",
+  "trigger:runtime_result_entries_immutable_delete",
+  "trigger:runtime_result_entries_immutable_update",
+  "trigger:runtime_results_immutable_delete",
+  "trigger:runtime_results_immutable_update",
 ] as const;
 const repositoryRoot = new URL("../../", import.meta.url);
 
@@ -124,7 +179,7 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
       unknown
     >;
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
-    assert.equal(migrationCount["count"], 2);
+    assert.equal(migrationCount["count"], 8);
     raw.close();
 
     const reopened = openAuthorityDatabase(temporary.path);
@@ -173,6 +228,12 @@ test("startup upgrades an exact Issue 10 authority database through the additive
     assert.deepEqual(versions, [
       { version: 1, migration_id: "001_r003_authority_core" },
       { version: 2, migration_id: "002_r003_magicchat_ingress" },
+      { version: 3, migration_id: "003_r003_researcher_analyst" },
+      { version: 4, migration_id: "004_r003_researcher_analyst_authority_repair" },
+      { version: 5, migration_id: "005_r003_researcher_analyst_durable_recovery" },
+      { version: 6, migration_id: "006_r003_researcher_analyst_legacy_arrival_reconciliation" },
+      { version: 7, migration_id: "007_r003_terminal_delivery_recovery" },
+      { version: 8, migration_id: "008_r003_opaque_completion_receipts" },
     ]);
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
   } finally {
@@ -490,11 +551,11 @@ test("startup refuses unsupported and drifted schemas", () => {
     const first = openAuthorityDatabase(versioned.path);
     first.close();
     const future = new DatabaseSync(versioned.path);
-    future.exec("PRAGMA user_version = 3");
+    future.exec("PRAGMA user_version = 9");
     future.close();
     assert.throws(
       () => openAuthorityDatabase(versioned.path),
-      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 3/u.test(error.message),
+      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 9/u.test(error.message),
     );
 
     const second = openAuthorityDatabase(drifted.path);
@@ -729,7 +790,7 @@ test("startup refuses a tampered durable MagicChat request instead of replaying 
   }
 });
 
-test("startup recomputes the deterministic clarification Question metadata", () => {
+test("Board entries reject direct mutation before a later startup could observe drift", () => {
   const temporary = temporaryDatabase("tampered-clarification-question");
   try {
     const authority = openAuthorityDatabase(temporary.path);
@@ -740,16 +801,8 @@ test("startup recomputes the deterministic clarification Question metadata", () 
     authority.close();
 
     const tampered = new DatabaseSync(temporary.path);
-    tampered
-      .prepare("UPDATE board_entries SET content_digest = ? WHERE entry_type = 'Question'")
-      .run("0".repeat(64));
+    assert.throws(() => tampered.prepare("UPDATE board_entries SET content_digest = ? WHERE entry_type = 'Question'").run("0".repeat(64)), /immutable/);
     tampered.close();
-
-    assert.throws(
-      () => openAuthorityDatabase(temporary.path),
-      (error: unknown) =>
-        error instanceof AuthorityStartupError && /clarification Question metadata is invalid/u.test(error.message),
-    );
   } finally {
     temporary.cleanup();
   }
@@ -782,7 +835,7 @@ test("startup refuses a stable wait whose confirmed clarification message record
   }
 });
 
-test("startup refuses a RESEARCHER handoff whose matching clarification Observation is missing", () => {
+test("Board entries reject deletion of a clarification Observation", () => {
   const temporary = temporaryDatabase("missing-clarification-observation");
   try {
     const authority = openAuthorityDatabase(temporary.path);
@@ -813,14 +866,8 @@ test("startup refuses a RESEARCHER handoff whose matching clarification Observat
     authority.close();
 
     const tampered = new DatabaseSync(temporary.path);
-    tampered.prepare("DELETE FROM board_entries WHERE entry_type = 'Observation'").run();
+    assert.throws(() => tampered.prepare("DELETE FROM board_entries WHERE entry_type = 'Observation'").run(), /immutable/);
     tampered.close();
-
-    assert.throws(
-      () => openAuthorityDatabase(temporary.path),
-      (error: unknown) =>
-        error instanceof AuthorityStartupError && /matching clarification Observation is invalid/u.test(error.message),
-    );
   } finally {
     temporary.cleanup();
   }
