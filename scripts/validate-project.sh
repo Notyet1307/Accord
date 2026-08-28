@@ -38,8 +38,15 @@ for required in \
   tsconfig.build.json \
   contracts/r003-core-handoff.json \
   contracts/r003-magicchat-handoff.json \
+  contracts/r003-researcher-analyst-handoff.json \
   migrations/001_r003_authority_core.sql \
-  migrations/002_r003_magicchat_ingress.sql
+  migrations/002_r003_magicchat_ingress.sql \
+  migrations/003_r003_researcher_analyst.sql \
+  migrations/004_r003_researcher_analyst_authority_repair.sql \
+  migrations/005_r003_researcher_analyst_durable_recovery.sql \
+  migrations/006_r003_researcher_analyst_legacy_arrival_reconciliation.sql \
+  migrations/007_r003_terminal_delivery_recovery.sql \
+  migrations/008_r003_opaque_completion_receipts.sql
 do
   [ -f "$required" ] && [ ! -L "$required" ] || fail "$required must be one regular, non-symlink file"
 done
@@ -233,14 +240,15 @@ run_node_restricted scripts/clean.mjs
 run_node_restricted node_modules/typescript/lib/tsc.js -p tsconfig.build.json
 run_node_restricted --test-isolation=none --test dist/test/contracts.test.js
 run_node_restricted --test-isolation=none --test dist/test/sqlite-startup.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/researcher-analyst.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 
 EXPECTED_HANDOFF=$(run_node_restricted -e \
-  'const fs=require("node:fs");process.stdout.write(`HANDOFF ${JSON.stringify(JSON.parse(fs.readFileSync("contracts/r003-magicchat-handoff.json","utf8")))}`)')
+  'const fs=require("node:fs");process.stdout.write(`HANDOFF ${JSON.stringify(JSON.parse(fs.readFileSync("contracts/r003-researcher-analyst-handoff.json","utf8")))}`)')
 ACTUAL_HANDOFF=$(run_node_restricted dist/src/handoff.js)
-[ "$ACTUAL_HANDOFF" = "$EXPECTED_HANDOFF" ] || fail "executable R003 MagicChat contract/migration handoff changed"
+[ "$ACTUAL_HANDOFF" = "$EXPECTED_HANDOFF" ] || fail "executable R003 Researcher/Analyst contract/migration handoff changed"
 
 unset ACCORD_VALIDATION_SECRET_CANARY
 printf '%s\n' "$ACTUAL_HANDOFF"

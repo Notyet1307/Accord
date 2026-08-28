@@ -15,7 +15,12 @@ import {
   serializeR003MagicChatHandoff,
 } from "../src/contracts/magicchat-handoff.js";
 import {
+  R003_RESEARCHER_ANALYST_HANDOFF,
+  serializeR003ResearcherAnalystHandoff,
+} from "../src/contracts/researcher-analyst-handoff.js";
+import {
   CORE_DATABASE_SCHEMA_VERSION,
+  CONTRACT_VERSIONS,
   CORE_TRANSACTION_AUTHORITY_TABLES,
   DATABASE_SCHEMA_VERSION,
   FIXED_WORKFLOW_DEFINITION,
@@ -123,7 +128,7 @@ test("the checked-in handoff exactly matches executable contract and migration f
   assert.deepEqual(handoffFile, R003_CORE_HANDOFF);
   assert.equal(serializeR003CoreHandoff(), `HANDOFF ${JSON.stringify(handoffFile)}`);
   assert.equal(R003_CORE_HANDOFF.databaseSchemaVersion, CORE_DATABASE_SCHEMA_VERSION);
-  assert.equal(DATABASE_SCHEMA_VERSION, 2);
+  assert.equal(DATABASE_SCHEMA_VERSION, 8);
   assert.equal(R003_CORE_HANDOFF.fixedWorkflowDefinition, FIXED_WORKFLOW_DEFINITION);
   assert.deepEqual(R003_CORE_HANDOFF.transactionAuthority, CORE_TRANSACTION_AUTHORITY_TABLES);
   assert.equal(TRANSACTION_AUTHORITY_TABLES.includes("magicchat_inbox_states"), true);
@@ -142,7 +147,7 @@ test("the ingress handoff fixes the no-network protocol and same-Run RESEARCHER 
   ) as unknown;
   assert.deepEqual(handoffFile, R003_MAGICCHAT_HANDOFF);
   assert.equal(serializeR003MagicChatHandoff(), `HANDOFF ${JSON.stringify(handoffFile)}`);
-  assert.equal(R003_MAGICCHAT_HANDOFF.databaseSchemaVersion, DATABASE_SCHEMA_VERSION);
+  assert.equal(R003_MAGICCHAT_HANDOFF.databaseSchemaVersion, 2);
   assert.equal(R003_MAGICCHAT_HANDOFF.magicChat.sourceCommit, MAGICCHAT_SOURCE_COMMIT);
   assert.equal(R003_MAGICCHAT_HANDOFF.magicChat.appWebSocketContract, MAGICCHAT_APP_WEBSOCKET_CONTRACT);
   assert.equal(R003_MAGICCHAT_HANDOFF.magicChat.networkEnabled, false);
@@ -162,6 +167,25 @@ test("the ingress handoff fixes the no-network protocol and same-Run RESEARCHER 
     const source = readFileSync(new URL(migration.file, repositoryRoot), "utf8");
     assert.equal(createHash("sha256").update(source, "utf8").digest("hex"), migration.sha256);
   }
+});
+
+test("the checked-in Researcher/Analyst handoff is generated, not a static Reviewer target", () => {
+  const handoffFile = JSON.parse(
+    readFileSync(new URL("contracts/r003-researcher-analyst-handoff.json", repositoryRoot), "utf8"),
+  ) as unknown;
+  assert.equal("reviewerTarget" in R003_RESEARCHER_ANALYST_HANDOFF, false);
+  assert.throws(() => serializeR003ResearcherAnalystHandoff(), /generated from one persisted winning Case/);
+  assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.providerPort.networkEnabled, false);
+  assert.equal(CONTRACT_VERSIONS.runtimeProviderDelivery, "accord.runtime-provider-delivery/v2");
+  assert.equal(CONTRACT_VERSIONS.runtimeOpaqueCompletionReceipt, "accord.runtime-opaque-completion-receipt/v1");
+  assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.contractVersions.runtimeProviderDelivery, CONTRACT_VERSIONS.runtimeProviderDelivery);
+  assert.equal((handoffFile as { contractVersions?: { runtimeProviderDelivery?: unknown } }).contractVersions?.runtimeProviderDelivery, CONTRACT_VERSIONS.runtimeProviderDelivery);
+  assert.equal((handoffFile as { contractVersions?: { runtimeOpaqueCompletionReceipt?: unknown } }).contractVersions?.runtimeOpaqueCompletionReceipt, CONTRACT_VERSIONS.runtimeOpaqueCompletionReceipt);
+  assert.equal((handoffFile as { reviewerTarget?: { proposalBoardRevision?: unknown } }).reviewerTarget?.proposalBoardRevision, 4);
+  const prerequisite = readFileSync(new URL("contracts/r003-magicchat-handoff.json", repositoryRoot), "utf8");
+  assert.equal(createHash("sha256").update(prerequisite, "utf8").digest("hex"), R003_RESEARCHER_ANALYST_HANDOFF.prerequisite.sha256);
+  const migration = readFileSync(new URL(R003_RESEARCHER_ANALYST_HANDOFF.migration.file, repositoryRoot), "utf8");
+  assert.equal(createHash("sha256").update(migration, "utf8").digest("hex"), R003_RESEARCHER_ANALYST_HANDOFF.migration.sha256);
 });
 
 test("toolchain and strict compiler facts are exact in the clean snapshot", () => {

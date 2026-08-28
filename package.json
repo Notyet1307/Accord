@@ -14,14 +14,15 @@
       "import": "./dist/src/index.js"
     },
     "./r003-core-handoff": "./contracts/r003-core-handoff.json",
-    "./r003-magicchat-handoff": "./contracts/r003-magicchat-handoff.json"
+    "./r003-magicchat-handoff": "./contracts/r003-magicchat-handoff.json",
+    "./r003-researcher-analyst-handoff": "./contracts/r003-researcher-analyst-handoff.json"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "test:contract": "node --test dist/test/contracts.test.js",
-    "test:integration": "node --test dist/test/sqlite-startup.integration.test.js",
+    "test:integration": "node --test dist/test/sqlite-startup.integration.test.js dist/test/researcher-analyst.integration.test.js",
     "test:conformance": "node --test dist/test/synthetic-intake.conformance.test.js dist/test/magicchat-protocol.conformance.test.js",
     "test": "npm run test:contract && npm run test:integration && npm run test:conformance",
     "check:no-external-seams": "node scripts/check-no-external-seams.mjs",

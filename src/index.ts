@@ -7,7 +7,37 @@ export {
 } from "./contracts/versions.js";
 export { R003_CORE_HANDOFF, serializeR003CoreHandoff } from "./contracts/handoff.js";
 export { R003_MAGICCHAT_HANDOFF, serializeR003MagicChatHandoff } from "./contracts/magicchat-handoff.js";
+export {
+  R003_RESEARCHER_ANALYST_HANDOFF,
+  generateR003ResearcherAnalystHandoff,
+  serializeR003ResearcherAnalystHandoff,
+  type GeneratedR003ResearcherAnalystHandoff,
+  type ReviewerHandoffTarget,
+} from "./contracts/researcher-analyst-handoff.js";
 export { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "./contracts/intake.js";
+export {
+  ANALYST_OUTPUT_SCHEMA,
+  ANALYST_PROFILE_VERSION,
+  NATIVE_BAIZHI_PROVIDER_PORT_VERSION,
+  RESEARCHER_OUTPUT_SCHEMA,
+  RESEARCHER_PROFILE_VERSION,
+  RUNTIME_VERSION,
+  installTrustedSyntheticSourceManifest,
+  normalizeProfileInvocationRequest,
+  type AnalystOutput,
+  type ApprovedSyntheticSource,
+  type ContextEntry,
+  type PreparedAttempt,
+  type PreparedProfileInvocation,
+  type Profile,
+  type ProfileInvocationRequest,
+  type ProviderPort,
+  type ProviderWire,
+  type ResearcherOutput,
+  type ContractRejection,
+  type ProviderResultArbitration,
+  type ResultArbitration,
+} from "./researcher-analyst.js";
 export {
   MAGICCHAT_APP_WEBSOCKET_CONTRACT,
   MAGICCHAT_SOURCE_COMMIT,
@@ -19,6 +49,8 @@ export {
 export type {
   AuditCorrelationId,
   AuditEventId,
+  ArrivalId,
+  AttemptId,
   BoardEntryId,
   BoardId,
   CaseId,
@@ -26,9 +58,28 @@ export type {
   InboxReceiptId,
   MagicChatMessageRecordId,
   MagicChatRequestEnvelopeId,
+  InvocationId,
   PendingActionId,
   WaitChallengeId,
   WorkflowRunId,
+  ResultId,
+  ContextId,
+  SourceId,
+  ResponseId,
+} from "./core/ids.js";
+export {
+  deriveSourceId,
+  parseArrivalId,
+  parseAttemptId,
+  parseBoardEntryId,
+  parseBoardId,
+  parseCaseId,
+  parseContextId,
+  parseInvocationId,
+  parseResponseId,
+  parseResultId,
+  parseSourceId,
+  parseWorkflowRunId,
 } from "./core/ids.js";
 export {
   MagicChatProtocolAdapter,
