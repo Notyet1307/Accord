@@ -1,0 +1,35 @@
+{
+  "schema": "accord:r003-c1-oracle:v1",
+  "oracleId": "O01",
+  "owner": "accord-r003-independent-verification",
+  "source": {
+    "specParent": 48,
+    "scenarioIds": ["S5"],
+    "specBodyHash": "sha256:739cefcc4fc567f1515d29ad1e2ab21026daa2ff118dba84c6c109a544b58cf3"
+  },
+  "purpose": "Schema-9 upgrade, restart safety, migration fingerprint, fixed Reviewer and Writer Context persistence, and preserved Researcher/Analyst handoff.",
+  "testFile": "dist/test/oracles/r003-c1-o01-schema9.test.js",
+  "cases": [
+    {
+      "id": "fresh-schema8-to-9",
+      "input": "A fresh schema-8 database with the accepted Researcher/Analyst state.",
+      "expect": "Exactly one schema-9 migration with the frozen identity and checksum plus stable Reviewer and Writer Context rows."
+    },
+    {
+      "id": "restart-schema9",
+      "input": "The same database reopened after schema 9.",
+      "expect": "No duplicate migration or Context rows and no change to existing Researcher/Analyst records."
+    },
+    {
+      "id": "handoff-preservation",
+      "input": "The accepted Researcher/Analyst fixture after schema-9 Context persistence.",
+      "expect": "A schema-valid handoff with unchanged winning Researcher and Analyst identities and digest."
+    },
+    {
+      "id": "conflict-rejection",
+      "input": "A conflicting migration identity, checksum, or Context identity.",
+      "expect": "Bounded failure with no partially committed authority state."
+    }
+  ],
+  "workerRule": "The implementation Worker may read this Oracle but must not modify it. Any mismatch is REPLAN_REQUIRED."
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "accord:r003-c1-oracle:v1",
+  "oracleId": "O03",
+  "owner": "accord-r003-independent-verification",
+  "source": {
+    "specParent": 48,
+    "scenarioIds": ["S5"],
+    "specBodyHash": "sha256:739cefcc4fc567f1515d29ad1e2ab21026daa2ff118dba84c6c109a544b58cf3"
+  },
+  "purpose": "Reviewer and Writer Context visibility, Case, Run, Board and revision binding, explicit authority denials, and redacted denial audit records.",
+  "testFile": "dist/test/oracles/r003-c1-o03-profile-context-authority.test.js",
+  "cases": [
+    {
+      "id": "reviewer-target-view",
+      "input": "Reviewer requests the exact Analyst target and complete cited graph.",
+      "expect": "Allowed only for the current Case, Run, Board, revision, and fixed Reviewer Profile."
+    },
+    {
+      "id": "writer-boundary-view",
+      "input": "Writer requests entries outside its fixed Context boundary.",
+      "expect": "Only the minimum permitted current-Case entries are visible; Writer output behavior remains unavailable."
+    },
+    {
+      "id": "cross-case-read",
+      "input": "A Profile requests another Case.",
+      "expect": "Denied and recorded without exposing protected content."
+    },
+    {
+      "id": "authority-escalation",
+      "input": "A Profile attempts Evidence authority, Approval, publication, or Workflow-instruction mutation.",
+      "expect": "Denied and recorded without changing authoritative state."
+    },
+    {
+      "id": "private-history-read",
+      "input": "A Profile requests hidden reasoning, private Runtime history, credentials, or unrelated source material.",
+      "expect": "Denied and recorded without returning the protected value."
+    }
+  ],
+  "workerRule": "The implementation Worker may read this Oracle but must not modify it. Any mismatch is REPLAN_REQUIRED."
+}

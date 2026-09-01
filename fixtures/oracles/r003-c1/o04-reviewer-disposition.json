@@ -1,0 +1,45 @@
+{
+  "schema": "accord:r003-c1-oracle:v1",
+  "oracleId": "O04",
+  "owner": "accord-r003-independent-verification",
+  "source": {
+    "specParent": 48,
+    "scenarioIds": ["S5"],
+    "specBodyHash": "sha256:739cefcc4fc567f1515d29ad1e2ab21026daa2ff118dba84c6c109a544b58cf3"
+  },
+  "purpose": "Dual Reviewer Critique and VerificationResult validation, provenance, disposition, and missing, unrelated, malformed, or stale Context failure behavior.",
+  "testFile": "dist/test/oracles/r003-c1-o04-reviewer-disposition.test.js",
+  "cases": [
+    {
+      "id": "supported-target",
+      "input": "A valid target and complete cited graph that supports the material content.",
+      "expect": "One independently validated Critique and one independently validated VerificationResult with complete shared provenance and an explicit disposition."
+    },
+    {
+      "id": "unsupported-material",
+      "input": "An unsupported material Claim or Proposal.",
+      "expect": "An explicit issue disposition that prevents silent downstream eligibility."
+    },
+    {
+      "id": "contradictory-material",
+      "input": "A materially contradictory Claim or Proposal.",
+      "expect": "An explicit issue disposition that prevents silent downstream eligibility."
+    },
+    {
+      "id": "missing-or-unrelated-context",
+      "input": "A missing or unrelated target or cited graph.",
+      "expect": "Fail closed with no candidate mutation and no Approval or publication state."
+    },
+    {
+      "id": "malformed-output",
+      "input": "A result missing either typed output or required provenance.",
+      "expect": "Reject the result without appending a partial H1 Reviewer Handoff."
+    },
+    {
+      "id": "stale-target",
+      "input": "The target or Board revision is stale.",
+      "expect": "Fail closed with no current Board mutation."
+    }
+  ],
+  "workerRule": "The implementation Worker may read this Oracle but must not modify it. Any mismatch is REPLAN_REQUIRED."
+}
