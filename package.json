@@ -25,6 +25,10 @@
     "test:integration": "node --test dist/test/sqlite-startup.integration.test.js dist/test/researcher-analyst.integration.test.js",
     "test:conformance": "node --test dist/test/synthetic-intake.conformance.test.js dist/test/magicchat-protocol.conformance.test.js",
     "test": "npm run test:contract && npm run test:integration && npm run test:conformance",
+    "verify:oracle:r003-c1:o01": "npm run build && node scripts/verify-r003-c1-oracle.mjs O01 && node --test dist/test/oracles/r003-c1-o01-schema9.test.js",
+    "verify:oracle:r003-c1:o02": "npm run build && node scripts/verify-r003-c1-oracle.mjs O02 && node --test dist/test/oracles/r003-c1-o02-four-profile-arbitration.test.js",
+    "verify:oracle:r003-c1:o03": "npm run build && node scripts/verify-r003-c1-oracle.mjs O03 && node --test dist/test/oracles/r003-c1-o03-profile-context-authority.test.js",
+    "verify:oracle:r003-c1:o04": "npm run build && node scripts/verify-r003-c1-oracle.mjs O04 && node --test dist/test/oracles/r003-c1-o04-reviewer-disposition.test.js",
     "check:no-external-seams": "node scripts/check-no-external-seams.mjs",
     "handoff": "node dist/src/handoff.js"
   },

@@ -1,0 +1,45 @@
+{
+  "schema": "accord:r003-c1-oracle:v1",
+  "oracleId": "O02",
+  "owner": "accord-r003-independent-verification",
+  "source": {
+    "specParent": 48,
+    "scenarioIds": ["S5"],
+    "specBodyHash": "sha256:739cefcc4fc567f1515d29ad1e2ab21026daa2ff118dba84c6c109a544b58cf3"
+  },
+  "purpose": "Four fixed Profile Invocation and Attempt arbitration, duplicate, divergent, late and unknown outcomes, and preserved Researcher/Analyst behavior.",
+  "testFile": "dist/test/oracles/r003-c1-o02-four-profile-arbitration.test.js",
+  "cases": [
+    {
+      "id": "four-fixed-profiles",
+      "input": "Researcher, Analyst, Reviewer, and Writer Contexts.",
+      "expect": "One bounded Invocation per fixed Profile with exact Case, Run, Board, and Context references."
+    },
+    {
+      "id": "duplicate-attempt",
+      "input": "The same logical Attempt result arrives twice.",
+      "expect": "One winner and one audit-only duplicate."
+    },
+    {
+      "id": "divergent-attempt",
+      "input": "Two fresh divergent results arrive for one Invocation.",
+      "expect": "At most one permitted winner and the divergent arrival retained as audit evidence."
+    },
+    {
+      "id": "late-attempt",
+      "input": "A schema-valid result arrives after a winner or after its accepted freshness boundary.",
+      "expect": "The late result remains audit evidence and cannot update the Board."
+    },
+    {
+      "id": "unknown-attempt",
+      "input": "The provider outcome cannot be recovered.",
+      "expect": "An honest unknown outcome and bounded recovery without an automatic retry loop."
+    },
+    {
+      "id": "researcher-analyst-regression",
+      "input": "The accepted Researcher/Analyst fixture.",
+      "expect": "Unchanged winner records and handoff digest."
+    }
+  ],
+  "workerRule": "The implementation Worker may read this Oracle but must not modify it. Any mismatch is REPLAN_REQUIRED."
+}
