@@ -1,0 +1,41 @@
+{
+  "schema": "pi-ticket-planning:decision-manifest:v1",
+  "baseSha": "64316348ff7015a34957295375e17d3b17cb4c82",
+  "policy": {
+    "identity": "Accord repository policy",
+    "path": "AGENTS.md",
+    "sha256": "sha256:70462c0d6dbf64860ad8c0c12af4abfd0bcc6fb02472d727a6aeedeeab381352",
+    "byteCount": 11346
+  },
+  "productRelease": {
+    "identity": "R003/r1",
+    "path": "docs/product/releases/r003-governed-case-blackboard-walking-skeleton.md",
+    "sha256": "sha256:225958fe9a85ddab3cb0ef4576520bcc92d826b9869d55461610f5f37746c4fe",
+    "byteCount": 10748
+  },
+  "decisions": [
+    {
+      "identity": "ADR-0002/r1",
+      "status": "ACCEPTED",
+      "path": "docs/adr/0002-production-coordination-runtime-language.md",
+      "sha256": "sha256:5b499ef9bf24ce2dd97f446b47ff2b40816a6158b1b8f2accef8b2f25126eefb",
+      "byteCount": 16082
+    },
+    {
+      "identity": "ADR-0003/r1",
+      "status": "ACCEPTED",
+      "path": "docs/adr/0003-r003-governed-case-blackboard-boundary.md",
+      "sha256": "sha256:2a5f3e39f457d9551ed2720253146378ba207fba5fcba11dcaedc973e92df119",
+      "byteCount": 23899
+    }
+  ],
+  "dependencyHandoffs": [
+    {
+      "identity": "R003 Researcher/Analyst handoff",
+      "path": "contracts/r003-researcher-analyst-handoff.json",
+      "sha256": "sha256:5e7ec4517fa4fec75daf6fdb9be4f52f2555df6890f1db98b619b9e248fd40f5",
+      "byteCount": 40011
+    }
+  ],
+  "digest": "sha256:446fd29ef426f7295224ab12ca05993212f7d10f35ce84ac94feaefbcdf7720d"
+}

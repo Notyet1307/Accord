@@ -1,0 +1,18 @@
+{
+  "schema": "pi-ticket-planning:spec-acceptance:v1",
+  "parent": {
+    "number": 48,
+    "title": "R003 C1 Delivery Spec: Reviewer disposition foundation",
+    "bodyHash": "sha256:739cefcc4fc567f1515d29ad1e2ab21026daa2ff118dba84c6c109a544b58cf3"
+  },
+  "source": {
+    "baseSha": "c8f4183f02608ce24d5bedf3ceeb31a1a3b315cf",
+    "specContentHash": "sha256:0d87b46b66fa5856ea1077dd95852586c3d3acd0ba2b5fade2e80d8a9297c419"
+  },
+  "decision": {
+    "caseId": "PC-r003-spec",
+    "approvalId": "F-human-spec-publication-fbe8bfb5-ad5b-48b6-bb9e-8ee5ded946db",
+    "acceptedAt": "2026-09-01T04:40:24.536Z"
+  },
+  "digest": "sha256:d51841062d2550b8a340a245ab9521be185d5af09e6de7acef1e4a6ab2fab2a1"
+}
