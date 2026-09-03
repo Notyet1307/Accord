@@ -1,0 +1,67 @@
+name: security-agent-suite-reference
+
+on:
+  pull_request:
+    paths:
+      - "reference/security-agent-suite/**"
+      - ".github/workflows/security-agent-suite-reference.yml"
+  push:
+    branches:
+      - main
+      - "feat/security-agent-suite-reference"
+    paths:
+      - "reference/security-agent-suite/**"
+      - ".github/workflows/security-agent-suite-reference.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-agent-suite-reference-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reference/security-agent-suite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+      - name: Format
+        run: test -z "$(gofmt -l $(find cmd internal -name '*.go' -type f))"
+      - name: Test core with race detector
+        run: GOWORK=off go test -race ./...
+      - name: Vet core
+        run: GOWORK=off go vet ./...
+      - name: Verify contracts and required files
+        run: ./scripts/verify.sh
+      - name: Run five-agent deterministic demo
+        run: ./scripts/demo.sh
+
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reference/security-agent-suite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+      - name: Download pinned MCP dependencies
+        working-directory: reference/security-agent-suite/mcpserver
+        run: GOWORK=off go mod download
+      - name: Test MCP module
+        working-directory: reference/security-agent-suite/mcpserver
+        run: GOWORK=off go test ./...
+      - name: Vet MCP module
+        working-directory: reference/security-agent-suite/mcpserver
+        run: GOWORK=off go vet ./...
+      - name: Build MCP binary
+        run: make build-mcp
