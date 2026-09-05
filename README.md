@@ -433,8 +433,7 @@ R002/r2 的验证结果与 ADR-0001 作为 R002 范围内的历史证据保留�
 
 状态：`COMMITTED`
 
-当前 `main` 已合入 TypeScript/SQLite authority core、MagicChat ingress/wait-resume 和
-`RESEARCHER` → `ANALYST` Runtime recovery 三个实现切片。这些是代码、契约、迁移和确定性测试证据；真实 MagicChat 资源、真实模型调用、trusted local qualification 和 S1–S4 仍未被证明，因此不能声称 R003 已完成。
+当前 `main` 已合入 TypeScript/SQLite authority core、MagicChat ingress/wait-resume、`RESEARCHER` → `ANALYST` Runtime recovery，以及 schema 9、四个固定 Profile 的 bounded Invocation/Attempt arbitration、最小权限 Reviewer/Writer Context boundary、双 Reviewer disposition（`Critique` + `VerificationResult`）和 H1 Reviewer Handoff。这些仅是代码、契约、迁移和确定性测试证据；仍无 Writer 输出、Artifact、Human Approval、publication、真实外部执行或完整 R003 结果，故不能声称 R003 已完成。
 
 R003 的精确边界是：
 
