@@ -46,7 +46,8 @@ for required in \
   migrations/005_r003_researcher_analyst_durable_recovery.sql \
   migrations/006_r003_researcher_analyst_legacy_arrival_reconciliation.sql \
   migrations/007_r003_terminal_delivery_recovery.sql \
-  migrations/008_r003_opaque_completion_receipts.sql
+  migrations/008_r003_opaque_completion_receipts.sql \
+  migrations/009_r003_reviewer_writer_contexts.sql
 do
   [ -f "$required" ] && [ ! -L "$required" ] || fail "$required must be one regular, non-symlink file"
 done
@@ -238,6 +239,13 @@ run_node_restricted scripts/check-no-external-seams.mjs
 run_node_restricted node_modules/typescript/lib/tsc.js -p tsconfig.json --noEmit
 run_node_restricted scripts/clean.mjs
 run_node_restricted node_modules/typescript/lib/tsc.js -p tsconfig.build.json
+run_node_restricted --test-isolation=none --test dist/test/oracles/r003-c1-o01-schema9.test.js
+run_node_restricted --test-isolation=none --test dist/test/oracles/r003-c1-o02-four-profile-arbitration.test.js
+run_node_restricted --test-isolation=none --test dist/test/oracles/r003-c1-o03-profile-context-authority.test.js
+run_node_restricted --test-isolation=none --test dist/test/reviewer-context.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/oracles/r003-c1-o04-reviewer-disposition.test.js
+run_node_restricted --test-isolation=none --test dist/test/reviewer-disposition.integration.test.js
+
 run_node_restricted --test-isolation=none --test dist/test/contracts.test.js
 run_node_restricted --test-isolation=none --test dist/test/sqlite-startup.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/researcher-analyst.integration.test.js

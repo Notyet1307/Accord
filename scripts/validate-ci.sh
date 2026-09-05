@@ -26,6 +26,13 @@ printf '%s\n' "NOTICE $CI_VALIDATION_KIND CI validation; this is not staged-roll
 "$NPM_BIN" run check:no-external-seams
 "$NPM_BIN" run typecheck
 "$NPM_BIN" run build
+"$NODE_BIN" --test dist/test/oracles/r003-c1-o01-schema9.test.js
+"$NODE_BIN" --test dist/test/oracles/r003-c1-o02-four-profile-arbitration.test.js
+"$NODE_BIN" --test dist/test/oracles/r003-c1-o03-profile-context-authority.test.js
+"$NODE_BIN" --test dist/test/reviewer-context.integration.test.js
+"$NODE_BIN" --test dist/test/oracles/r003-c1-o04-reviewer-disposition.test.js
+"$NODE_BIN" --test dist/test/reviewer-disposition.integration.test.js
+
 "$NPM_BIN" run test:contract
 "$NPM_BIN" run test:integration
 

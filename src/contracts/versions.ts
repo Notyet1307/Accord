@@ -1,7 +1,9 @@
 export const CORE_HANDOFF_VERSION = "accord.r003-core-handoff/v1" as const;
 export const NORMALIZED_INTAKE_CONTRACT = "accord.normalized-synthetic-intake/v1" as const;
 export const CORE_DATABASE_SCHEMA_VERSION = 1 as const;
-export const DATABASE_SCHEMA_VERSION = 8 as const;
+/** The generated Researcher/Analyst artifact is a frozen schema-8 handoff. */
+export const RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION = 8 as const;
+export const DATABASE_SCHEMA_VERSION = 9 as const;
 export const MIGRATION_ID = "001_r003_authority_core" as const;
 export const MIGRATION_FILE = "migrations/001_r003_authority_core.sql" as const;
 export const MAGICCHAT_INGRESS_MIGRATION_ID = "002_r003_magicchat_ingress" as const;
@@ -18,6 +20,10 @@ export const RESEARCHER_ANALYST_TERMINAL_DELIVERY_RECOVERY_MIGRATION_ID = "007_r
 export const RESEARCHER_ANALYST_TERMINAL_DELIVERY_RECOVERY_MIGRATION_FILE = "migrations/007_r003_terminal_delivery_recovery.sql" as const;
 export const RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_ID = "008_r003_opaque_completion_receipts" as const;
 export const RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_FILE = "migrations/008_r003_opaque_completion_receipts.sql" as const;
+export const REVIEWER_WRITER_MIGRATION_ID = "009_r003_reviewer_writer_contexts" as const;
+export const REVIEWER_WRITER_MIGRATION_FILE = "migrations/009_r003_reviewer_writer_contexts.sql" as const;
+export const REVIEWER_WRITER_MIGRATION_SHA256 = "1bcd2a85cfe61426b00fad2a855f2ab75ba0bbb42640a201ba6a1a3d4d603aba" as const;
+export const REVIEWER_WRITER_SCHEMA_FINGERPRINT = "a2ac1ffd0104bd23c092b6bbc6580d737d85953d818f145a6676e339bd942535" as const;
 export const FIXED_WORKFLOW_DEFINITION = "r003-fixed/v1" as const;
 export const FIXED_WORKFLOW_DEFINITION_ID = "workflow_definition_r003_fixed_v1" as const;
 

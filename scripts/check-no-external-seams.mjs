@@ -8,6 +8,15 @@ const sourceExtensions = new Set([".mjs", ".sh", ".ts"]);
 const policySource = "scripts/check-no-external-seams.mjs";
 const capabilityRegression = "test/validation-capabilities.integration.test.ts";
 const localCrashHarness = "test/synthetic-intake.conformance.test.ts";
+const c1TestEntrypoints = [
+  "test/oracles/r003-c1-o01-schema9.test.ts",
+  "test/oracles/r003-c1-o02-four-profile-arbitration.test.ts",
+  "test/oracles/r003-c1-o03-profile-context-authority.test.ts",
+  "test/reviewer-context.integration.test.ts",
+  "test/oracles/r003-c1-o04-reviewer-disposition.test.ts",
+  "test/reviewer-disposition.integration.test.ts",
+];
+const c1BuiltTestEntrypoints = c1TestEntrypoints.map((entrypoint) => `dist/${entrypoint.replace(/\.ts$/u, ".js")}`);
 const deliveryWorkflow = ".github/workflows/herdr-delivery-gate.yml";
 const requiredValidationEntrypoints = [
   "scripts/check-no-external-seams.mjs",
@@ -24,6 +33,7 @@ const requiredValidationEntrypoints = [
   "test/sqlite-startup.integration.test.ts",
   "test/synthetic-intake.conformance.test.ts",
   "test/validation-capabilities.integration.test.ts",
+  ...c1TestEntrypoints,
 ];
 const requiredEntrypointSet = new Set(requiredValidationEntrypoints);
 const requiredInvocationMarkers = new Map([
@@ -35,6 +45,7 @@ const requiredInvocationMarkers = new Map([
       '"$NPM_BIN" run check:no-external-seams',
       '"$NPM_BIN" run typecheck',
       '"$NPM_BIN" run build',
+      ...c1BuiltTestEntrypoints.map((entrypoint) => `"$NODE_BIN" --test ${entrypoint}`),
       '"$NPM_BIN" run test:contract',
       '"$NPM_BIN" run test:integration',
       "dist/test/validation-capabilities.integration.test.js",
@@ -60,6 +71,7 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted node_modules/typescript/lib/tsc.js -p tsconfig.json --noEmit",
       "run_node_restricted scripts/clean.mjs",
       "run_node_restricted node_modules/typescript/lib/tsc.js -p tsconfig.build.json",
+      ...c1BuiltTestEntrypoints.map((entrypoint) => `run_node_restricted --test-isolation=none --test ${entrypoint}`),
       "run_node_restricted --test-isolation=none --test dist/test/contracts.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/sqlite-startup.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/researcher-analyst.integration.test.js",
@@ -105,6 +117,13 @@ const shellSecretRead =
 const shellHeredoc = /<<-?\s*["']?[A-Za-z_][A-Za-z0-9_]*["']?/u;
 const shellSharedTempFallback = /\$\{TMPDIR:-\/(?:private\/)?tmp\}/u;
 const shellHomeCacheFallback = /(?:\$HOME|\$\{HOME\})\/\.npm/u;
+const reviewerDispositionForbidden = [
+  [/(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']node:sqlite["']/u, "direct node:sqlite import"],
+  [/\bDatabaseSync\b/u, "direct DatabaseSync reference"],
+  [/(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["'][^"']*\/persistence(?:\/[^"']*)?["']/u, "direct persistence owner import"],
+  [/\.\s*(?:prepare|exec|transaction)\s*\(/u, "direct SQL or transaction ownership"],
+];
+const reviewerDispositionContract = /\bInvocationBoundOutputContract\b/u;
 
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -172,6 +191,17 @@ for (const [path, markers] of forbiddenCiInvocationMarkers) {
     if (source.includes(marker)) {
       failures.push(`${path}: non-qualification CI must not contain ${JSON.stringify(marker)}`);
     }
+  }
+}
+
+const reviewerDisposition = files.find((file) => file.path === "src/reviewer-disposition.ts");
+if (reviewerDisposition !== undefined) {
+  const source = readFileSync(reviewerDisposition.url, "utf8");
+  for (const [pattern, description] of reviewerDispositionForbidden) {
+    if (pattern.test(source)) failures.push(`${reviewerDisposition.path}: ${description}`);
+  }
+  if (!reviewerDispositionContract.test(source)) {
+    failures.push(`${reviewerDisposition.path}: InvocationBoundOutputContract seam is required`);
   }
 }
 
