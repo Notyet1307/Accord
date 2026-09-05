@@ -14,6 +14,24 @@ export {
   type GeneratedR003ResearcherAnalystHandoff,
   type ReviewerHandoffTarget,
 } from "./contracts/researcher-analyst-handoff.js";
+export {
+  REVIEWER_DISPOSITION_HANDOFF_KIND,
+  REVIEWER_DISPOSITION_HANDOFF_VERSION,
+  type ReviewerCritiqueIssue,
+  type ReviewerCritiqueOutput,
+  type ReviewerCritiqueSeverity,
+  type ReviewerDisposition,
+  type ReviewerDispositionEntryRef,
+  type ReviewerDispositionHandoff,
+  type ReviewerDispositionOutput,
+  type ReviewerTargetRef,
+  type ReviewerVerificationOutput,
+  type ReviewerVerificationStatus,
+} from "./contracts/reviewer-disposition.js";
+export {
+  createReviewerDispositionContract,
+  parseReviewerDispositionHandoff,
+} from "./reviewer-disposition.js";
 export { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "./contracts/intake.js";
 export {
   ANALYST_OUTPUT_SCHEMA,

@@ -94,6 +94,12 @@ import {
   type ProviderResultArbitration,
 } from "../researcher-analyst.js";
 import {
+  persistFixedProfileContext,
+  readFixedProfileContext,
+  type FixedProfileContextInput,
+  type PersistedFixedProfileContext,
+} from "../profile-context.js";
+import {
   parsePersistenceRow,
   requireHexDigest,
   requireInteger,
@@ -426,6 +432,11 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       throw new Error(`unsupported database schema version ${version}; expected ${latestMigration.version}`);
     }
     validateAppliedSchema(database, migrations.slice(0, appliedIndex + 1));
+    if (version === 8) {
+      /* Schema 9 only widens a valid legacy graph; it never repairs one. */
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+    }
   }
   const pending = migrations.filter((migration) => migration.version > version);
   if (pending.length > 0) {
@@ -3643,6 +3654,16 @@ export class AuthorityDatabase {
         : [Object.freeze({ cursor: parsed.snapshot.cursor, request: parsed.nextRequest })];
     });
     return Object.freeze(pending);
+  }
+
+  public persistFixedProfileContext(input: FixedProfileContextInput): PersistedFixedProfileContext {
+    this.#assertOpen();
+    return persistFixedProfileContext(this.#database, input);
+  }
+
+  public inspectFixedProfileContext(invocationId: InvocationId): PersistedFixedProfileContext | undefined {
+    this.#assertOpen();
+    return readFixedProfileContext(this.#database, invocationId);
   }
 
   /**

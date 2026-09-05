@@ -18,8 +18,9 @@ import {
   type ProviderWire,
   type ResultArbitration,
 } from "../src/index.js";
-import { beginPreparedAttempt, commitProviderResult, executePreparedAttempt, prepareProfileInvocation, reconstructWinnerBoardEntries, recordUnknownRuntimeArrival } from "../src/researcher-analyst.js";
+import { beginPreparedAttempt, commitProviderResult, executePreparedAttempt, prepareProfileInvocation, reconstructGenericWinnerMaterialization, reconstructWinnerBoardEntries, recordUnknownRuntimeArrival } from "../src/researcher-analyst.js";
 import { deriveRuntimeAuditEventId } from "../src/core/ids.js";
+import type { InvocationBoundOutputContract } from "../src/profile-runtime.js";
 import type { DatabaseSync } from "node:sqlite";
 
 const caseId = parseCaseId("case_0000000000000000000000000000000000000000000000000000000000000000");
@@ -39,6 +40,19 @@ const attempt: PreparedAttempt = { attemptId, attemptNumber: 1, invocationId, no
 declare const prepared: PreparedProfileInvocation;
 declare const port: ProviderPort;
 declare const result: ProviderWire;
+declare const reviewer: PreparedProfileInvocation & Readonly<{ profile: "REVIEWER" }>;
+const genericContract: InvocationBoundOutputContract = {
+  invocationId,
+  contextDigest: "0".repeat(64),
+  profile: "REVIEWER",
+  profileVersion: "accord.reviewer/v1",
+  outputSchema: "accord.reviewer-output/v1",
+  materialize() { return { boardEntries: [{ basedOn: [entryId], entryType: "Critique", payload: { text: "reviewed" }, sourceRefs: [] }] }; },
+};
+// @ts-expect-error an Analyst cannot supply a Reviewer-or-Writer materialization contract.
+const nonGenericProfileContract: InvocationBoundOutputContract = { ...genericContract, profile: "ANALYST" };
+// @ts-expect-error an Attempt cannot bind a generic output contract to an Invocation.
+const wrongGenericContract: InvocationBoundOutputContract = { ...genericContract, invocationId: attemptId };
 
 // @ts-expect-error Case and Board identities are intentionally incompatible.
 const wrongCase: ProfileInvocationRequest = { caseId: boardId, modelId: "fixture-model", now: "2026-08-26T00:01:02.000Z", profile: "RESEARCHER" };
@@ -72,6 +86,12 @@ function assertExportedSeamsAreBranded(database: DatabaseSync): void {
   reconstructWinnerBoardEntries(database, resultId, {});
   // @ts-expect-error executePreparedAttempt keeps the Invocation identity distinct from a Result identity.
   executePreparedAttempt(database, { ...prepared, invocationId: resultId }, port, "2026-08-26T00:01:02.000Z");
+  const genericPort: ProviderPort = { outputContract: genericContract, complete() { return result; } };
+  commitProviderResult(database, reviewer, attempt, result, undefined, genericContract);
+  executePreparedAttempt(database, reviewer, genericPort, "2026-08-26T00:01:02.000Z");
+  reconstructGenericWinnerMaterialization(database, invocationId);
+  // @ts-expect-error a Result cannot select a generic winner materialization by Invocation identity.
+  reconstructGenericWinnerMaterialization(database, resultId);
   // @ts-expect-error unknown arrivals bind only their exact Case/Board/Run/Invocation/Attempt family tuple.
   recordUnknownRuntimeArrival(database, { attemptId, boardId: caseId, caseId, details: {}, eventKind: "test", invocationId, recordedAt: "2026-08-26T00:01:02.000Z", workflowRunId: runId });
   // @ts-expect-error a Board ID cannot select the Case handoff graph.
@@ -100,4 +120,7 @@ void attempt;
 void wrongCase;
 void wrongAttempt;
 void rawCase;
+void genericContract;
+void nonGenericProfileContract;
+void wrongGenericContract;
 void assertExportedSeamsAreBranded;

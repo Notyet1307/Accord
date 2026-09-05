@@ -25,6 +25,7 @@ import {
   DATABASE_SCHEMA_VERSION,
   FIXED_WORKFLOW_DEFINITION,
   NORMALIZED_INTAKE_CONTRACT,
+  RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION,
   SQLITE_PRAGMAS,
   TRANSACTION_AUTHORITY_TABLES,
 } from "../src/contracts/versions.js";
@@ -128,7 +129,7 @@ test("the checked-in handoff exactly matches executable contract and migration f
   assert.deepEqual(handoffFile, R003_CORE_HANDOFF);
   assert.equal(serializeR003CoreHandoff(), `HANDOFF ${JSON.stringify(handoffFile)}`);
   assert.equal(R003_CORE_HANDOFF.databaseSchemaVersion, CORE_DATABASE_SCHEMA_VERSION);
-  assert.equal(DATABASE_SCHEMA_VERSION, 8);
+  assert.equal(DATABASE_SCHEMA_VERSION, 9);
   assert.equal(R003_CORE_HANDOFF.fixedWorkflowDefinition, FIXED_WORKFLOW_DEFINITION);
   assert.deepEqual(R003_CORE_HANDOFF.transactionAuthority, CORE_TRANSACTION_AUTHORITY_TABLES);
   assert.equal(TRANSACTION_AUTHORITY_TABLES.includes("magicchat_inbox_states"), true);
@@ -174,6 +175,8 @@ test("the checked-in Researcher/Analyst handoff is generated, not a static Revie
     readFileSync(new URL("contracts/r003-researcher-analyst-handoff.json", repositoryRoot), "utf8"),
   ) as unknown;
   assert.equal("reviewerTarget" in R003_RESEARCHER_ANALYST_HANDOFF, false);
+  assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.databaseSchemaVersion, RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION);
+  assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.migration.version, RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION);
   assert.throws(() => serializeR003ResearcherAnalystHandoff(), /generated from one persisted winning Case/);
   assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.providerPort.networkEnabled, false);
   assert.equal(CONTRACT_VERSIONS.runtimeProviderDelivery, "accord.runtime-provider-delivery/v2");

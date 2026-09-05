@@ -179,7 +179,7 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
       unknown
     >;
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
-    assert.equal(migrationCount["count"], 8);
+    assert.equal(migrationCount["count"], 9);
     raw.close();
 
     const reopened = openAuthorityDatabase(temporary.path);
@@ -234,6 +234,7 @@ test("startup upgrades an exact Issue 10 authority database through the additive
       { version: 6, migration_id: "006_r003_researcher_analyst_legacy_arrival_reconciliation" },
       { version: 7, migration_id: "007_r003_terminal_delivery_recovery" },
       { version: 8, migration_id: "008_r003_opaque_completion_receipts" },
+      { version: 9, migration_id: "009_r003_reviewer_writer_contexts" },
     ]);
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
   } finally {
@@ -551,11 +552,11 @@ test("startup refuses unsupported and drifted schemas", () => {
     const first = openAuthorityDatabase(versioned.path);
     first.close();
     const future = new DatabaseSync(versioned.path);
-    future.exec("PRAGMA user_version = 9");
+    future.exec("PRAGMA user_version = 10");
     future.close();
     assert.throws(
       () => openAuthorityDatabase(versioned.path),
-      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 9/u.test(error.message),
+      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 10/u.test(error.message),
     );
 
     const second = openAuthorityDatabase(drifted.path);

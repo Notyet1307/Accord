@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { deriveSourceId, generateR003ResearcherAnalystHandoff, normalizeProfileInvocationRequest, R003_RESEARCHER_ANALYST_HANDOFF, type PreparedAttempt, type PreparedProfileInvocation, type ProfileInvocationRequest } from "../src/index.js";
+import { deriveSourceId, generateR003ResearcherAnalystHandoff, normalizeProfileInvocationRequest, R003_RESEARCHER_ANALYST_HANDOFF, type PreparedAttempt, type PreparedProfileInvocation, type ProfileInvocationRequest, type ProviderPort } from "../src/index.js";
 import { deriveRuntimeArrivalId, deriveRuntimeAuditCorrelationId, deriveRuntimeAuditEventId, deriveRuntimeBoardEntryId, deriveRuntimeOpaqueCompletionReceiptId, deriveRuntimeProviderDeliveryId, deriveRuntimeResponseId, deriveRuntimeResultId } from "../src/core/ids.js";
 import { MagicChatProtocolAdapter } from "../src/magicchat/adapter.js";
 import { loadAuthorityMigrations } from "../src/persistence/migration.js";
 import { openAuthorityDatabase } from "../src/persistence/sqlite-authority.js";
-import { beginPreparedAttempt as beginPreparedAttemptRaw, prepareProfileInvocation as prepareProfileInvocationRaw, reconstructWinnerBoardEntries, recordUnknownRuntimeArrival, sealLegacyDeliveryProvenance } from "../src/researcher-analyst.js";
+import { beginPreparedAttempt as beginPreparedAttemptRaw, commitProviderResult, prepareProfileInvocation as prepareProfileInvocationRaw, reconstructGenericWinnerMaterialization, reconstructWinnerBoardEntries, recordUnknownRuntimeArrival, sealLegacyDeliveryProvenance } from "../src/researcher-analyst.js";
 import { SYNTHETIC_INTAKE, magicChatAckSuccessResponse, magicChatMessageCreatedEnvelope, magicChatMessageSendSuccessResponse, temporaryDatabase } from "./fixture.js";
+import type { GenericEntryType, InvocationBoundOutputContract } from "../src/profile-runtime.js";
 
 const source = Object.freeze({ content: "Synthetic policy permits a two-week decision window.", locator: "fixture://policy/two-week", observedAt: "2026-08-26T00:01:02.000Z", sourceKind: "SYNTHETIC_FIXTURE" });
 const digest = (value: string): string => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -48,6 +49,40 @@ function committedAnalystCase() {
   const winner = fixture.authority.commitProviderResult(analyst, fixture.authority.beginPreparedAttempt(analyst.invocationId, "2026-08-26T00:01:04.000Z"), analystResult(analyst));
   assert.equal(winner.outcome, "WINNER");
   return { ...fixture, analyst, winner };
+}
+
+function genericResult(text: string, requestId: string): string {
+  return wire({ providerMetadata: metadata(requestId, `${requestId}-response`), output: { text }, receivedAt: "2026-08-26T00:01:07.000Z", usage: { inputTokens: 8, outputTokens: 4, totalTokens: 12 } });
+}
+function genericContract(invocation: PreparedProfileInvocation, entryType: GenericEntryType = "Critique", invalid = false, assertFrozen = false): InvocationBoundOutputContract {
+  if (invocation.profile !== "REVIEWER" && invocation.profile !== "WRITER") throw new Error("generic contract requires Reviewer or Writer");
+  return Object.freeze({
+    invocationId: invocation.invocationId,
+    contextDigest: invocation.contextDigest,
+    profile: invocation.profile,
+    profileVersion: invocation.profileVersion,
+    outputSchema: invocation.outputSchema,
+    materialize(context: Readonly<PreparedProfileInvocation>, output: unknown) {
+      if (assertFrozen) {
+        assert.equal(Object.isFrozen(context), true);
+        assert.equal(Object.isFrozen(context.entries), true);
+        assert.equal(Object.isFrozen(output), true);
+        assert.throws(() => { Object.defineProperty(context, "objective", { value: "mutated" }); });
+        assert.throws(() => { Object.defineProperty(output, "text", { value: "mutated" }); });
+      }
+      if (invalid) return { boardEntries: [] };
+      const reference = context.entries[0];
+      if (reference === undefined) throw new Error("generic Context must retain its immutable Board reference");
+      const textValue = output !== null && typeof output === "object" && !Array.isArray(output) && "text" in output ? output.text : undefined;
+      const text = typeof textValue === "string" ? textValue : "missing";
+      return { boardEntries: [{ basedOn: [reference.id], entryType, payload: { text }, sourceRefs: [] }], handoff: { kind: `${context.profile.toLowerCase()}-handoff`, payload: { text }, version: "v1" } };
+    },
+  });
+}
+function commitGeneric(path: string, invocation: PreparedProfileInvocation, attempt: PreparedAttempt, value: string, contract: InvocationBoundOutputContract, at: string) {
+  const database = new DatabaseSync(path);
+  try { return commitProviderResult(database, invocation, attempt, value, at, contract); }
+  finally { database.close(); }
 }
 const V3_TABLES = ["cases", "boards", "workflow_runs", "inbox_receipts", "inbox_deliveries", "board_entries", "runtime_invocations", "approvals", "response_claims", "pending_side_effects", "audit_events", "magicchat_inbox_states", "wait_challenges", "magicchat_rpc_actions", "magicchat_messages", "profile_contexts", "runtime_attempts", "runtime_results", "runtime_result_arrivals"] as const;
 function copySharedTable(source: DatabaseSync, destination: DatabaseSync, table: string): void {
@@ -1636,4 +1671,112 @@ test("populated legacy reconciliation failures roll back exactly, then retry suc
       openAuthorityDatabase(postValidation.path).close();
     } finally { postValidation.cleanup(); }
   }
+});
+
+test("generic contracts fail before I/O and retain one captured binding through provider completion", async () => {
+  const fixture = committedAnalystCase();
+  try {
+    const reviewer = fixture.authority.prepareProfileInvocation({ caseId: fixture.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:06.000Z", profile: "REVIEWER" });
+    let calls = 0;
+    const port = { complete() { calls += 1; return genericResult("must not run", "generic-guard"); } };
+    await assert.rejects(fixture.authority.executePreparedAttempt(reviewer, port, "2026-08-26T00:01:06.000Z"), /output contract/);
+    await assert.rejects(fixture.authority.executePreparedAttempt(reviewer, { ...port, outputContract: { ...genericContract(reviewer), contextDigest: "0".repeat(64) } }, "2026-08-26T00:01:06.000Z"), /output contract/);
+    assert.equal(calls, 0);
+    const before = new DatabaseSync(fixture.temporary.path);
+    try {
+      const state = before.prepare(`SELECT attempt.state, board.revision AS board_revision, workflow.state AS workflow_state, workflow.revision AS workflow_revision,
+        (SELECT count(*) FROM runtime_results WHERE invocation_id = ?) AS results,
+        (SELECT count(*) FROM runtime_result_arrivals WHERE invocation_id = ?) AS arrivals,
+        (SELECT count(*) FROM board_entries WHERE case_id = ? AND author_id = 'REVIEWER') AS entries
+        FROM runtime_attempts attempt JOIN runtime_invocations invocation ON invocation.invocation_id = attempt.invocation_id JOIN boards board ON board.board_id = invocation.board_id JOIN workflow_runs workflow ON workflow.workflow_run_id = invocation.workflow_run_id WHERE attempt.invocation_id = ?`).get(reviewer.invocationId, reviewer.invocationId, reviewer.caseId, reviewer.invocationId) as Record<string, unknown>;
+      assert.deepEqual([state["state"], state["board_revision"], state["workflow_state"], state["workflow_revision"], state["results"], state["arrivals"], state["entries"]], ["READY", reviewer.boardRevision, "REVIEWER", reviewer.workflowRevision, 0, 0, 0]);
+      assert.equal(reconstructGenericWinnerMaterialization(before, reviewer.invocationId), undefined);
+    } finally { before.close(); }
+    let capturedDescriptor = false;
+    const original = genericContract(reviewer, "Critique", false, true);
+    const mutableContract = { ...original, materialize(this: InvocationBoundOutputContract, context: Readonly<PreparedProfileInvocation>, output: unknown) {
+      capturedDescriptor = Object.isFrozen(this); assert.deepEqual(Object.keys(this).sort(), ["contextDigest", "invocationId", "materialize", "outputSchema", "profile", "profileVersion"]);
+      return original.materialize(context, output);
+    } };
+    const mutablePort = { outputContract: mutableContract, complete(request) { calls += 1; assert.equal(request.retry, "DISABLED"); return Promise.resolve().then(() => {
+      mutableContract.contextDigest = "0".repeat(64); mutableContract.materialize = () => ({ boardEntries: [] }); mutablePort.outputContract = { ...mutableContract };
+      return genericResult("reviewed", "generic-reviewer");
+    }); } } satisfies ProviderPort;
+    const reviewerOutcome = await fixture.authority.executePreparedAttempt(reviewer, mutablePort, "2026-08-26T00:01:06.000Z");
+    if (reviewerOutcome.outcome !== "WINNER" || reviewerOutcome.materialization === undefined) throw new Error("Reviewer must commit a durable materialization");
+    assert.equal(capturedDescriptor, true); assert.equal(calls, 1); assert.equal(reviewerOutcome.materialization.handoff?.boardEntries.length, 1);
+    const writer = fixture.authority.prepareProfileInvocation({ caseId: fixture.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:08.000Z", profile: "WRITER" });
+    fixture.authority.close(); openAuthorityDatabase(fixture.temporary.path).close();
+    const reopened = new DatabaseSync(fixture.temporary.path);
+    try {
+      const counts = reopened.prepare(`SELECT
+        (SELECT count(*) FROM runtime_physical_responses WHERE invocation_id = ?) AS physical,
+        (SELECT count(*) FROM runtime_provider_deliveries WHERE invocation_id = ?) AS deliveries,
+        (SELECT count(*) FROM audit_events WHERE event_kind GLOB 'RUNTIME_GENERIC_OUTPUT_RESOLUTION:*' AND correlation_id = ?) AS resolutions,
+        (SELECT count(*) FROM board_entries WHERE case_id = ? AND author_id = 'WRITER') AS writer_entries`).get(reviewer.invocationId, reviewer.invocationId, deriveRuntimeAuditCorrelationId(reviewer.invocationId), reviewer.caseId) as Record<string, unknown>;
+      assert.deepEqual([counts["physical"], counts["deliveries"], counts["resolutions"], counts["writer_entries"]], [1, 1, 1, 0]);
+      assert.deepEqual(reconstructGenericWinnerMaterialization(reopened, reviewer.invocationId), reviewerOutcome.materialization);
+      assert.equal(reconstructGenericWinnerMaterialization(reopened, writer.invocationId), undefined);
+    } finally { reopened.close(); }
+  } finally { try { fixture.authority.close(); } catch {} fixture.temporary.cleanup(); }
+});
+
+test("two generic non-winners exhaust fresh authority once but cannot fail stale Workflow or Case authority", () => {
+  const fresh = committedAnalystCase();
+  try {
+    const reviewer = fresh.authority.prepareProfileInvocation({ caseId: fresh.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:06.000Z", profile: "REVIEWER" });
+    const first = fresh.authority.beginPreparedAttempt(reviewer.invocationId, "2026-08-26T00:01:06.000Z");
+    assert.equal(commitGeneric(fresh.temporary.path, reviewer, first, genericResult("invalid first", "generic-fresh-one"), genericContract(reviewer, "Critique", true), "2026-08-26T00:01:07.000Z").outcome, "INVALID");
+    const second = fresh.authority.beginPreparedAttempt(reviewer.invocationId, "2026-08-26T00:01:08.000Z"); assert.equal(second.attemptNumber, 2);
+    assert.equal(commitGeneric(fresh.temporary.path, reviewer, second, genericResult("invalid second", "generic-fresh-two"), genericContract(reviewer, "Critique", true), "2026-08-26T00:01:09.000Z").outcome, "INVALID");
+    assert.throws(() => fresh.authority.beginPreparedAttempt(reviewer.invocationId, "2026-08-26T00:01:10.000Z"), /terminal/);
+    const database = new DatabaseSync(fresh.temporary.path);
+    try {
+      const state = database.prepare(`SELECT invocation.status, workflow.state AS workflow_state, cases.status AS case_status,
+        (SELECT count(*) FROM audit_events WHERE correlation_id = ? AND event_kind = 'RUNTIME_ATTEMPTS_EXHAUSTED') AS exhaustion
+        FROM runtime_invocations invocation JOIN workflow_runs workflow ON workflow.workflow_run_id = invocation.workflow_run_id JOIN cases ON cases.case_id = invocation.case_id WHERE invocation.invocation_id = ?`).get(deriveRuntimeAuditCorrelationId(reviewer.invocationId), reviewer.invocationId) as Record<string, unknown>;
+      assert.deepEqual([state["status"], state["workflow_state"], state["case_status"], state["exhaustion"]], ["FAILED", "FAILED", "FAILED", 1]);
+    } finally { database.close(); }
+    fresh.authority.close(); openAuthorityDatabase(fresh.temporary.path).close();
+  } finally { try { fresh.authority.close(); } catch {} fresh.temporary.cleanup(); }
+
+  const stale = committedAnalystCase();
+  try {
+    const reviewer = stale.authority.prepareProfileInvocation({ caseId: stale.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:06.000Z", profile: "REVIEWER" });
+    const first = stale.authority.beginPreparedAttempt(reviewer.invocationId, "2026-08-26T00:01:06.000Z");
+    assert.equal(commitGeneric(stale.temporary.path, reviewer, first, genericResult("invalid first", "generic-stale-one"), genericContract(reviewer, "Critique", true), "2026-08-26T00:01:07.000Z").outcome, "INVALID");
+    const second = stale.authority.beginPreparedAttempt(reviewer.invocationId, "2026-08-26T00:01:08.000Z"); assert.equal(second.attemptNumber, 2);
+    const database = new DatabaseSync(stale.temporary.path);
+    try {
+      database.prepare("UPDATE boards SET revision = revision + 1 WHERE board_id = ?").run(reviewer.boardId);
+      assert.equal(commitProviderResult(database, reviewer, second, genericResult("stale candidate", "generic-stale-two"), "2026-08-26T00:01:09.000Z", genericContract(reviewer)).outcome, "STALE");
+      const state = database.prepare(`SELECT invocation.status, workflow.state AS workflow_state, cases.status AS case_status,
+        (SELECT count(*) FROM audit_events WHERE correlation_id = ? AND event_kind = 'RUNTIME_ATTEMPTS_EXHAUSTED') AS exhaustion
+        FROM runtime_invocations invocation JOIN workflow_runs workflow ON workflow.workflow_run_id = invocation.workflow_run_id JOIN cases ON cases.case_id = invocation.case_id WHERE invocation.invocation_id = ?`).get(deriveRuntimeAuditCorrelationId(reviewer.invocationId), reviewer.invocationId) as Record<string, unknown>;
+      assert.deepEqual([state["status"], state["workflow_state"], state["case_status"], state["exhaustion"]], ["FAILED", "REVIEWER", "OPEN", 1]);
+    } finally { database.close(); }
+    stale.authority.close(); openAuthorityDatabase(stale.temporary.path).close();
+  } finally { try { stale.authority.close(); } catch {} stale.temporary.cleanup(); }
+});
+
+test("maximum legal generic candidate commits and reconstructs after restart", async () => {
+  const fixture = committedAnalystCase();
+  try {
+    const reviewer = fixture.authority.prepareProfileInvocation({ caseId: fixture.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:06.000Z", profile: "REVIEWER" });
+    const chunk = "x".repeat(4_050); const payload = { a: chunk, b: chunk, c: chunk, d: chunk };
+    const contract: InvocationBoundOutputContract = Object.freeze({
+      invocationId: reviewer.invocationId, contextDigest: reviewer.contextDigest, profile: "REVIEWER", profileVersion: reviewer.profileVersion, outputSchema: reviewer.outputSchema,
+      materialize(context: Readonly<PreparedProfileInvocation>) {
+        const reference = context.entries[0]; if (reference === undefined) throw new Error("Reviewer Context must retain one Board reference");
+        return { boardEntries: Array.from({ length: 16 }, () => ({ basedOn: [reference.id], entryType: "Critique" as const, payload, sourceRefs: [] })), handoff: { kind: "reviewer-handoff", payload, version: "v1" } };
+      },
+    });
+    const outcome = await fixture.authority.executePreparedAttempt(reviewer, { outputContract: contract, complete() { return genericResult("tiny", "generic-maximum"); } }, "2026-08-26T00:01:06.000Z");
+    if (outcome.outcome !== "WINNER" || outcome.materialization === undefined) throw new Error("maximum legal generic candidate must win");
+    assert.equal(outcome.materialization.boardEntries.length, 16); assert.ok(JSON.stringify(outcome.materialization).length > 262_144);
+    fixture.authority.close(); openAuthorityDatabase(fixture.temporary.path).close();
+    const reopened = new DatabaseSync(fixture.temporary.path);
+    try { assert.deepEqual(reconstructGenericWinnerMaterialization(reopened, reviewer.invocationId), outcome.materialization); }
+    finally { reopened.close(); }
+  } finally { try { fixture.authority.close(); } catch {} fixture.temporary.cleanup(); }
 });
