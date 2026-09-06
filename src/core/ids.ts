@@ -27,9 +27,11 @@ export type SourceId = BusinessId<"SourceId">;
 export type ResponseId = BusinessId<"ResponseId">;
 export type ProviderDeliveryId = BusinessId<"ProviderDeliveryId">;
 export type OpaqueCompletionReceiptId = BusinessId<"OpaqueCompletionReceiptId">;
+export type ArtifactId = BusinessId<"ArtifactId">;
 
 const PREFIXES = {
   auditEvent: "audit",
+  artifact: "artifact",
   action: "action",
   board: "board",
   case: "case",
@@ -105,6 +107,15 @@ export function deriveRuntimeAuditEventId(namespace: "runtime-exhausted" | "runt
 }
 export function deriveSourceId(input: { readonly sourceKind: string; readonly locator: string; readonly contentDigest: string; readonly observedAt: string }): SourceId {
   return deriveRuntime<"SourceId">("source", "approved-synthetic-source", [input.sourceKind, input.locator, input.contentDigest, input.observedAt]);
+}
+export function deriveAcceptedEvidenceEntryId(input: { readonly candidateEntryId: BoardEntryId; readonly manifestDigest: string }): BoardEntryId {
+  return derive<"BoardEntryId">(PREFIXES.entry, "accepted-evidence", [input.candidateEntryId, input.manifestDigest]);
+}
+export function deriveEvidenceAcceptanceAuditEventId(entryId: BoardEntryId): AuditEventId {
+  return derive<"AuditEventId">(PREFIXES.auditEvent, "evidence-accepted", [entryId]);
+}
+export function deriveArtifactId(input: { readonly caseId: CaseId; readonly workflowRunId: WorkflowRunId }): ArtifactId {
+  return derive<"ArtifactId">(PREFIXES.artifact, "artifact", [input.caseId, input.workflowRunId]);
 }
 
 function derive<Kind extends string>(prefix: string, namespace: string, parts: readonly string[]): BusinessId<Kind> {
@@ -266,6 +277,7 @@ const BUSINESS_ID_PATTERNS = {
   auditCorrelationId: /^corr_[0-9a-f]{64}$/u,
   boardId: /^board_[0-9a-f]{64}$/u,
   caseId: /^case_[0-9a-f]{64}$/u,
+  artifactId: /^artifact_[0-9a-f]{64}$/u,
   deliveryId: /^delivery_[0-9a-f]{64}$/u,
   receiptId: /^receipt_[0-9a-f]{64}$/u,
   workflowRunId: /^run_[0-9a-f]{64}$/u,
@@ -290,6 +302,7 @@ function parseBusinessId<Kind extends string>(value: unknown, pattern: RegExp, l
   return value as BusinessId<Kind>;
 }
 
+export const parseArtifactId = (value: unknown): ArtifactId => parseBusinessId<"ArtifactId">(value, BUSINESS_ID_PATTERNS.artifactId, "artifactId");
 export const parseCaseId = (value: unknown): CaseId => parseBusinessId<"CaseId">(value, BUSINESS_ID_PATTERNS.caseId, "caseId");
 export const parseBoardId = (value: unknown): BoardId => parseBusinessId<"BoardId">(value, BUSINESS_ID_PATTERNS.boardId, "boardId");
 export const parseWorkflowRunId = (value: unknown): WorkflowRunId =>

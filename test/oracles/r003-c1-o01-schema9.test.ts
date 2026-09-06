@@ -74,9 +74,9 @@ test("O01 schema 9 migration is pinned and restart-stable", () => {
   const temporary = temporaryDatabase("r003-c1-o01");
   try {
     const migrations = loadAuthorityMigrations();
-    const migration = migrations.at(-1);
+    const migration = migrations.find((candidate) => candidate.version === 9);
     if (migration === undefined) throw new Error("schema 9 migration is missing");
-    assert.equal(DATABASE_SCHEMA_VERSION, 9);
+    assert.equal(DATABASE_SCHEMA_VERSION, 10);
     assert.equal(migration.version, 9);
     assert.equal(migration.id, REVIEWER_WRITER_MIGRATION_ID);
     assert.equal(migration.sha256, REVIEWER_WRITER_MIGRATION_SHA256);

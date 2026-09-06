@@ -3,7 +3,7 @@ export const NORMALIZED_INTAKE_CONTRACT = "accord.normalized-synthetic-intake/v1
 export const CORE_DATABASE_SCHEMA_VERSION = 1 as const;
 /** The generated Researcher/Analyst artifact is a frozen schema-8 handoff. */
 export const RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION = 8 as const;
-export const DATABASE_SCHEMA_VERSION = 9 as const;
+export const DATABASE_SCHEMA_VERSION = 10 as const;
 export const MIGRATION_ID = "001_r003_authority_core" as const;
 export const MIGRATION_FILE = "migrations/001_r003_authority_core.sql" as const;
 export const MAGICCHAT_INGRESS_MIGRATION_ID = "002_r003_magicchat_ingress" as const;
@@ -24,6 +24,10 @@ export const REVIEWER_WRITER_MIGRATION_ID = "009_r003_reviewer_writer_contexts" 
 export const REVIEWER_WRITER_MIGRATION_FILE = "migrations/009_r003_reviewer_writer_contexts.sql" as const;
 export const REVIEWER_WRITER_MIGRATION_SHA256 = "1bcd2a85cfe61426b00fad2a855f2ab75ba0bbb42640a201ba6a1a3d4d603aba" as const;
 export const REVIEWER_WRITER_SCHEMA_FINGERPRINT = "a2ac1ffd0104bd23c092b6bbc6580d737d85953d818f145a6676e339bd942535" as const;
+export const WRITER_ARTIFACT_MIGRATION_ID = "010_r003_writer_artifact" as const;
+export const WRITER_ARTIFACT_MIGRATION_FILE = "migrations/010_r003_writer_artifact.sql" as const;
+export const WRITER_ARTIFACT_MIGRATION_SHA256 = "72c8b0cd0839a15158147c4fabc6fb01949927a0777d692e932013e9208ace82" as const;
+export const WRITER_ARTIFACT_SCHEMA_FINGERPRINT = "fdbe020b7a8343fbf066cc1ad1fcfc2c6fc1ab255ea4dcbcb9aa1ca6fd2b2969" as const;
 export const FIXED_WORKFLOW_DEFINITION = "r003-fixed/v1" as const;
 export const FIXED_WORKFLOW_DEFINITION_ID = "workflow_definition_r003_fixed_v1" as const;
 
@@ -42,6 +46,7 @@ export const CORE_CONTRACT_VERSIONS = Object.freeze({
 } as const);
 
 export const CONTRACT_VERSIONS = Object.freeze({
+  artifact: "accord.artifact/v1",
   ...CORE_CONTRACT_VERSIONS,
   magicChatInboxState: "accord.magicchat-inbox-state/v1",
   magicChatMessage: "accord.magicchat-message/v1",
@@ -90,6 +95,7 @@ export const TRANSACTION_AUTHORITY_TABLES = Object.freeze([
   "runtime_provider_deliveries",
   "runtime_delivery_arrivals",
   "runtime_opaque_completion_receipts",
+  "artifacts",
 ] as const);
 
 export const SQLITE_PRAGMAS = Object.freeze({

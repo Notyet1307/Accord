@@ -53,6 +53,7 @@ import {
   type GenericMaterializationCandidate,
   type InvocationBoundOutputContract,
 } from "./profile-runtime.js";
+import { persistWriterArtifact } from "./writer-artifact.js";
 
 /** The fixed, no-network provider boundary used by this Issue. */
 export const NATIVE_BAIZHI_PROVIDER_PORT_VERSION = "accord.native-baizhi-provider-port/v1" as const;
@@ -1450,6 +1451,10 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
       return { arrivalId, attemptId, boardRevision: undefined, invocationId: prepared.invocationId, outcome, proposalBoardRevision: undefined, responseId, resultId };
     }
     const nextRevision = prepared.boardRevision + 1;
+    if (prepared.profile === "WRITER") {
+      if (winnerMaterialization === undefined) throw new Error("Writer winner lacks its durable Artifact materialization");
+      persistWriterArtifact(database, prepared, resultId, winnerMaterialization, trustedReceivedAt);
+    }
     const entries: { type: EntryType; payload: Readonly<Record<string, unknown>>; sourceRefs: readonly string[]; basedOn: readonly string[]; entryId?: BoardEntryId; contentDigest?: string }[] = [];
     if (prepared.profile === "RESEARCHER") { const result = validated as ResearcherOutput; const evidenceEntryIds = new Map(result.evidenceRefs.map((item, index) => [item.sourceId, deriveRuntimeBoardEntryId({ invocationId: prepared.invocationId, entryType: "EvidenceRef", index: result.intents.length + index })])); entries.push(...result.intents.map((item) => ({ type: "Intent" as const, payload: { objective: item.objective, scope: item.scope }, sourceRefs: [], basedOn: item.basedOn })), ...result.evidenceRefs.map((item) => ({ type: "EvidenceRef" as const, payload: { ...item }, sourceRefs: [item.sourceId], basedOn: [] })), ...result.observations.map((item) => ({ type: "Observation" as const, payload: { statement: item.statement }, sourceRefs: item.sourceRefs.map((sourceId) => evidenceEntryIds.get(sourceId) as string), basedOn: item.basedOn })));
     } else if (prepared.profile === "ANALYST") { const result = validated as AnalystOutput; const claimIds = result.claims.map((_, index) => deriveRuntimeBoardEntryId({ invocationId: prepared.invocationId, entryType: "Claim", index })); entries.push(...result.claims.map((item) => ({ type: "Claim" as const, payload: { statement: item.statement, unsupported: item.unsupported }, sourceRefs: [], basedOn: item.supportingEntryIds })), ...result.proposals.map((item) => ({ type: "Proposal" as const, payload: { action: item.action, supportStatus: item.supportStatus }, sourceRefs: [], basedOn: item.supportingClaimIndexes.map((index) => claimIds[index] as string) })));
