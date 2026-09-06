@@ -54,6 +54,8 @@ import {
   type InvocationBoundOutputContract,
 } from "./profile-runtime.js";
 import { persistWriterArtifact } from "./writer-artifact.js";
+import { parseReviewerDispositionHandoff } from "./reviewer-disposition.js";
+import type { ReviewerDispositionHandoff } from "./contracts/reviewer-disposition.js";
 
 /** The fixed, no-network provider boundary used by this Issue. */
 export const NATIVE_BAIZHI_PROVIDER_PORT_VERSION = "accord.native-baizhi-provider-port/v1" as const;
@@ -586,6 +588,28 @@ export function reconstructGenericWinnerMaterialization(database: DatabaseSync, 
   const audit = one(database, "SELECT details_json FROM audit_events WHERE audit_event_id = ?", deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]));
   if (audit === undefined) throw new Error("generic winner lacks its canonical materialization audit");
   return genericMaterializationFromAudit(audit["details_json"], prepared, attemptId, resultId);
+}
+
+export function reconstructReviewerDispositionHandoff(database: DatabaseSync, resultId: ResultId): ReviewerDispositionHandoff {
+  const reviewer = one(database, `SELECT invocation.invocation_id FROM runtime_results result
+    JOIN runtime_result_arrivals arrival ON arrival.result_id = result.result_id AND arrival.outcome = 'WINNER'
+    JOIN runtime_invocations invocation ON invocation.invocation_id = result.invocation_id AND invocation.node_id = 'REVIEWER' AND invocation.status = 'RESULT_COMMITTED'
+    WHERE result.result_id = ?`, parseResultId(resultId));
+  if (reviewer === undefined) throw new Error("Reviewer Result is not the exact durable winner");
+  const materialization = reconstructGenericWinnerMaterialization(database, parseInvocationId(reviewer["invocation_id"]));
+  if (materialization === undefined) throw new Error("Reviewer winner lacks its durable H1");
+  const handoff = parseReviewerDispositionHandoff(materialization);
+  if (handoff.resultId !== resultId) throw new Error("Reviewer H1 does not match its requested Result");
+  return handoff;
+}
+
+function currentReviewerH1(database: DatabaseSync, writer: PreparedProfileInvocation): ReviewerDispositionHandoff {
+  const reviewers = rows(database, `SELECT result.result_id FROM runtime_invocations invocation
+    JOIN runtime_results result ON result.invocation_id = invocation.invocation_id
+    JOIN runtime_result_arrivals arrival ON arrival.result_id = result.result_id AND arrival.outcome = 'WINNER'
+    WHERE invocation.case_id = ? AND invocation.workflow_run_id = ? AND invocation.node_id = 'REVIEWER' AND invocation.status = 'RESULT_COMMITTED'`, writer.caseId, writer.workflowRunId);
+  if (reviewers.length !== 1) throw new Error("Writer requires exactly one current durable Reviewer winner");
+  return reconstructReviewerDispositionHandoff(database, parseResultId(reviewers[0]?.["result_id"]));
 }
 
 function hasExactLegacyProviderDeliveryProvenance(database: DatabaseSync, delivery: Record<string, unknown>): boolean {
@@ -1426,6 +1450,7 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
   if (invalidReason !== undefined) return finalizeInvalidProviderReceipt(database, prepared, Object.freeze({ attemptId, attemptNumber: suppliedAttempt.attemptNumber, invocationId: prepared.invocationId, noSdkRetry: true }), delivery);
   return transaction(database, () => {
     const persistedAttempt = one(database, "SELECT state FROM runtime_attempts WHERE attempt_id = ?", attemptId);
+    const authoritativeH1 = prepared.profile === "WRITER" ? currentReviewerH1(database, prepared) : undefined;
     if (persistedAttempt === undefined) throw new Error("provider result Attempt disappeared after receipt");
     try { database.prepare(`INSERT INTO runtime_results (result_id, schema_version, invocation_id, attempt_id, provider_metadata_json, output_json, output_digest, usage_json, first_received_at) VALUES (?, 'accord.runtime-result/v1', ?, ?, ?, ?, ?, ?, ?)`)
       .run(resultId, prepared.invocationId, attemptId, json(persistedMetadata), json(persistedOutput), persistedOutputDigest, json(persistedUsage), trustedReceivedAt); }
@@ -1453,7 +1478,8 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
     const nextRevision = prepared.boardRevision + 1;
     if (prepared.profile === "WRITER") {
       if (winnerMaterialization === undefined) throw new Error("Writer winner lacks its durable Artifact materialization");
-      persistWriterArtifact(database, prepared, resultId, winnerMaterialization, trustedReceivedAt);
+      if (authoritativeH1 === undefined) throw new Error("Writer winner lacks authoritative H1");
+      persistWriterArtifact(database, prepared, resultId, winnerMaterialization, authoritativeH1, trustedReceivedAt);
     }
     const entries: { type: EntryType; payload: Readonly<Record<string, unknown>>; sourceRefs: readonly string[]; basedOn: readonly string[]; entryId?: BoardEntryId; contentDigest?: string }[] = [];
     if (prepared.profile === "RESEARCHER") { const result = validated as ResearcherOutput; const evidenceEntryIds = new Map(result.evidenceRefs.map((item, index) => [item.sourceId, deriveRuntimeBoardEntryId({ invocationId: prepared.invocationId, entryType: "EvidenceRef", index: result.intents.length + index })])); entries.push(...result.intents.map((item) => ({ type: "Intent" as const, payload: { objective: item.objective, scope: item.scope }, sourceRefs: [], basedOn: item.basedOn })), ...result.evidenceRefs.map((item) => ({ type: "EvidenceRef" as const, payload: { ...item }, sourceRefs: [item.sourceId], basedOn: [] })), ...result.observations.map((item) => ({ type: "Observation" as const, payload: { statement: item.statement }, sourceRefs: item.sourceRefs.map((sourceId) => evidenceEntryIds.get(sourceId) as string), basedOn: item.basedOn })));

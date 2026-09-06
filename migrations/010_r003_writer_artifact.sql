@@ -17,6 +17,10 @@ CREATE TABLE artifacts (
     substr(reviewer_handoff_id, 1, 8) = 'handoff_' AND
     substr(reviewer_handoff_id, 9) NOT GLOB '*[^0-9a-f]*'
   ),
+  reviewer_handoff_json TEXT NOT NULL CHECK (
+    json_valid(reviewer_handoff_json) AND
+    json_type(reviewer_handoff_json) = 'object'
+  ),
   content_markdown TEXT NOT NULL,
   content_digest TEXT NOT NULL CHECK (
     length(content_digest) = 64 AND

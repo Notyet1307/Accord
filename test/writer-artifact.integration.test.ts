@@ -6,11 +6,12 @@ import test from "node:test";
 import { PROFILE_CONTEXT_REQUEST_VERSION, type ProfileContextDecision } from "../src/contracts/profile-context.js";
 import type { ReviewerDispositionOutput, ReviewerTargetRef } from "../src/contracts/reviewer-disposition.js";
 import { generateR003ResearcherAnalystHandoff, type ReviewerHandoffTarget } from "../src/contracts/researcher-analyst-handoff.js";
-import { deriveSourceId, parseBoardEntryId, type BoardEntryId, type CaseId } from "../src/core/ids.js";
+import { deriveRuntimeResultId, deriveSourceId, parseBoardEntryId, type BoardEntryId, type CaseId } from "../src/core/ids.js";
 import { MagicChatProtocolAdapter } from "../src/magicchat/adapter.js";
-import { openAuthorityDatabase, type AuthorityDatabase } from "../src/persistence/sqlite-authority.js";
+import { AuthorityStartupError, openAuthorityDatabase, type AuthorityDatabase } from "../src/persistence/sqlite-authority.js";
 import { createReviewerDispositionContract, parseReviewerDispositionHandoff } from "../src/reviewer-disposition.js";
 import { decideProfileContextAccess } from "../src/reviewer-context.js";
+import { GENERIC_MATERIALIZATION_SCHEMA_VERSION, WRITER_MATERIALIZATION_SCHEMA_VERSION, deriveDurableGenericMaterialization, parseDurableGenericMaterialization } from "../src/profile-runtime.js";
 import { reconstructGenericWinnerMaterialization, type PreparedProfileInvocation } from "../src/researcher-analyst.js";
 import { createWriterArtifactContract, parseWriterArtifactAuthority } from "../src/writer-artifact.js";
 import {
@@ -89,6 +90,7 @@ test("C2 promotes exact sealed evidence and persists one immutable Writer Artifa
     const beforePromotion = authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:08.000Z", profile: "WRITER" });
     const database = new DatabaseSync(value.temporary.path); const candidateId = candidate(database, value.caseId); const before = counts(database, value.caseId); database.close();
     const accepted = authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:09.000Z");
+    authority.close(); authority = openAuthorityDatabase(value.temporary.path);
     assert.deepEqual(authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:10.000Z"), accepted);
     assert.throws(() => authority.beginPreparedAttempt(beforePromotion.invocationId, "2026-08-26T00:01:10.000Z"), /stale/u);
     const writer = authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:11.000Z", profile: "WRITER" });
@@ -96,13 +98,14 @@ test("C2 promotes exact sealed evidence and persists one immutable Writer Artifa
     assert.throws(() => contract.materialize(writer, { materialAssertions: [{ statement: "Candidate material", basisEntryId: candidateId }] }), /basis is missing/u);
     assert.throws(() => contract.materialize(writer, { materialAssertions: [{ statement: "Adverse material", basisEntryId: h1.verificationResult.entryId }] }), /basis is missing/u);
     assert.throws(() => contract.materialize(writer, { materialAssertions: [{ statement: "Missing material", basisEntryId: `entry_${"0".repeat(64)}` }] }), /basis is missing/u);
+    assert.throws(() => contract.materialize(writer, { materialAssertions: [{ statement: source.content, basisEntryId: accepted.entryId }], extra: true }), /unsupported or missing field/u);
     raw.close();
     const output = { materialAssertions: [{ statement: source.content, basisEntryId: accepted.entryId }] };
     const outcome = await authority.executePreparedAttempt(writer, { outputContract: contract, complete: () => wire(output, "c2-writer", "2026-08-26T00:01:12.000Z") }, "2026-08-26T00:01:11.000Z");
-    assert.equal(outcome.outcome, "WINNER"); assert.ok(outcome.materialization); assert.equal(outcome.materialization.boardEntries.length, 1); assert.equal(outcome.materialization.boardEntries[0]?.entryType, "ArtifactRef");
+    assert.equal(outcome.outcome, "WINNER"); assert.ok(outcome.materialization); assert.equal(outcome.materialization.schemaVersion, WRITER_MATERIALIZATION_SCHEMA_VERSION); assert.equal(outcome.materialization.boardEntries.length, 1); assert.equal(outcome.materialization.boardEntries[0]?.entryType, "ArtifactRef");
     const inspected = new DatabaseSync(value.temporary.path);
     assert.deepEqual(counts(inspected, value.caseId), [Number(before[0]) + 2, "WAIT_FOR_APPROVAL", 1, 1, 0]);
-    const artifact = parseWriterArtifactAuthority(inspected, writer, outcome.materialization); const row = inspected.prepare("SELECT * FROM artifacts WHERE source_result_id = ?").get(outcome.resultId) as Row;
+    const artifact = parseWriterArtifactAuthority(inspected, writer, outcome.materialization, h1); const row = inspected.prepare("SELECT * FROM artifacts WHERE source_result_id = ?").get(outcome.resultId) as Row;
     assert.deepEqual([row["artifact_id"], row["artifact_digest"], row["reviewer_handoff_id"], row["reviewer_result_id"]], [artifact.artifactId, artifact.artifactDigest, artifact.reviewerHandoffId, artifact.reviewerResultId]);
     assert.throws(() => inspected.prepare("UPDATE artifacts SET content_markdown = 'tampered'").run(), /immutable/u); inspected.close();
     authority.close(); authority = openAuthorityDatabase(value.temporary.path); authority.close(); authority = openAuthorityDatabase(value.temporary.path);
@@ -124,4 +127,38 @@ test("C2 rolls Artifact, ArtifactRef, H2, and workflow transition back together 
     authority.close(); authority = openAuthorityDatabase(value.temporary.path);
     const replayed = new DatabaseSync(value.temporary.path); assert.deepEqual(counts(replayed, value.caseId).slice(1), ["WAIT_FOR_APPROVAL", 1, 1, 0]); replayed.close();
   } finally { try { authority.close(); } catch {} value.temporary.cleanup(); }
+});
+
+test("C2 rejects a forged H1 inside the Writer winner transaction", async () => {
+  const value = await fixture("c2-forged-h1");
+  try {
+    const raw = new DatabaseSync(value.temporary.path); const candidateId = candidate(raw, value.caseId); raw.close();
+    const accepted = value.authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:09.000Z"); const writer = value.authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:11.000Z", profile: "WRITER" });
+    const database = new DatabaseSync(value.temporary.path); const reviewerMaterialization = reconstructGenericWinnerMaterialization(database, value.reviewer.invocationId); assert.ok(reviewerMaterialization); const h1 = parseReviewerDispositionHandoff(reviewerMaterialization); const forged = Object.freeze({ ...h1, payloadDigest: "0".repeat(64) }); const contract = createWriterArtifactContract(database, writer, forged); database.close();
+    await assert.rejects(() => value.authority.executePreparedAttempt(writer, { outputContract: contract, complete: () => wire({ materialAssertions: [{ statement: source.content, basisEntryId: accepted.entryId }] }, "c2-forged-h1", "2026-08-26T00:01:12.000Z") }, "2026-08-26T00:01:11.000Z"), /exact durable H1/u);
+    const inspected = new DatabaseSync(value.temporary.path); assert.deepEqual(counts(inspected, value.caseId).slice(1), ["WRITER", 0, 0, 0]); inspected.close();
+  } finally { try { value.authority.close(); } catch {} value.temporary.cleanup(); }
+});
+
+test("C2 startup independently refuses accepted Evidence and sealed tuple corruption", async (t) => {
+  for (const mode of ["accepted-row", "sealed-tuple"] as const) await t.test(mode, async () => {
+    const value = await fixture(`c2-${mode}`);
+    try {
+      const initial = new DatabaseSync(value.temporary.path); const candidateId = candidate(initial, value.caseId); initial.close(); const accepted = value.authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:09.000Z"); value.authority.close();
+      const database = new DatabaseSync(value.temporary.path); const triggerName = mode === "accepted-row" ? "board_entries_immutable_update" : "approved_synthetic_sources_immutable_update"; const trigger = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?").get(triggerName) as Row; database.exec(`DROP TRIGGER ${triggerName}`);
+      if (mode === "accepted-row") database.prepare("UPDATE board_entries SET author_id = 'EVIDENCE_ACCEPTANCE_FORGED' WHERE board_entry_id = ?").run(accepted.entryId);
+      else database.prepare("UPDATE approved_synthetic_sources SET locator = 'fixture://policy/forged'").run();
+      database.exec(String(trigger["sql"])); database.close();
+      assert.throws(() => openAuthorityDatabase(value.temporary.path), (error: unknown) => error instanceof AuthorityStartupError && /accepted EvidenceRef|approved synthetic source manifest member|persisted approved sources/u.test(error.message));
+    } finally { try { value.authority.close(); } catch {} value.temporary.cleanup(); }
+  });
+});
+
+test("historical Writer generic v1 materialization remains byte-compatible", async () => {
+  const value = await fixture("c2-writer-v1");
+  try {
+    const writer = value.authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:08.000Z", profile: "WRITER" }); const attempt = value.authority.beginPreparedAttempt(writer.invocationId, "2026-08-26T00:01:08.000Z"); const resultId = deriveRuntimeResultId({ invocationId: writer.invocationId, attemptId: attempt.attemptId, outputDigest: "1".repeat(64) }); const reference = writer.entries[0]; assert.ok(reference);
+    const historical = deriveDurableGenericMaterialization(writer, attempt.attemptId, resultId, { boardEntries: [{ entryType: "Critique", payload: { text: "historical Writer output" }, basedOn: [reference.id], sourceRefs: [] }], handoff: { kind: "writer-handoff", version: "v1", payload: { text: "historical Writer output" } } }); const bytes = JSON.stringify(historical);
+    assert.equal(historical.schemaVersion, GENERIC_MATERIALIZATION_SCHEMA_VERSION); assert.equal("writerArtifact" in historical, false); assert.equal(JSON.stringify(parseDurableGenericMaterialization(writer, attempt.attemptId, resultId, JSON.parse(bytes))), bytes);
+  } finally { try { value.authority.close(); } catch {} value.temporary.cleanup(); }
 });

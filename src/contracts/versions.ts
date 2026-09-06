@@ -26,8 +26,8 @@ export const REVIEWER_WRITER_MIGRATION_SHA256 = "1bcd2a85cfe61426b00fad2a855f2ab
 export const REVIEWER_WRITER_SCHEMA_FINGERPRINT = "a2ac1ffd0104bd23c092b6bbc6580d737d85953d818f145a6676e339bd942535" as const;
 export const WRITER_ARTIFACT_MIGRATION_ID = "010_r003_writer_artifact" as const;
 export const WRITER_ARTIFACT_MIGRATION_FILE = "migrations/010_r003_writer_artifact.sql" as const;
-export const WRITER_ARTIFACT_MIGRATION_SHA256 = "72c8b0cd0839a15158147c4fabc6fb01949927a0777d692e932013e9208ace82" as const;
-export const WRITER_ARTIFACT_SCHEMA_FINGERPRINT = "fdbe020b7a8343fbf066cc1ad1fcfc2c6fc1ab255ea4dcbcb9aa1ca6fd2b2969" as const;
+export const WRITER_ARTIFACT_MIGRATION_SHA256 = "d1b02b48b2649b93a1cb72e13feabaf6a753e85e90e61f47f5b6ef515db55d3a" as const;
+export const WRITER_ARTIFACT_SCHEMA_FINGERPRINT = "2c9959096d550c9ea06cdf9ac8f598286a55bdf3194c12185bf74d9284a19fd0" as const;
 export const FIXED_WORKFLOW_DEFINITION = "r003-fixed/v1" as const;
 export const FIXED_WORKFLOW_DEFINITION_ID = "workflow_definition_r003_fixed_v1" as const;
 

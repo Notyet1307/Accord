@@ -10,6 +10,7 @@ import {
 import type { PreparedProfileInvocation } from "./researcher-analyst.js";
 
 export const GENERIC_MATERIALIZATION_SCHEMA_VERSION = "accord.runtime-generic-materialization/v1" as const;
+export const WRITER_MATERIALIZATION_SCHEMA_VERSION = "accord.runtime-generic-materialization/v2" as const;
 export type GenericProfile = "REVIEWER" | "WRITER";
 export type GenericEntryType = "EvidenceRef" | "Observation" | "Question" | "Intent" | "Claim" | "Proposal" | "Critique" | "VerificationResult" | "ArtifactRef";
 export type HandoffId = string & { readonly __brand: "HandoffId" };
@@ -48,7 +49,7 @@ export type DurableGenericHandoff = GenericHandoffCandidate & Readonly<{
   boardEntries: readonly Readonly<{ entryId: BoardEntryId; contentDigest: string }>[];
 }>;
 export type DurableGenericMaterialization = Readonly<{
-  schemaVersion: typeof GENERIC_MATERIALIZATION_SCHEMA_VERSION;
+  schemaVersion: typeof GENERIC_MATERIALIZATION_SCHEMA_VERSION | typeof WRITER_MATERIALIZATION_SCHEMA_VERSION;
   profile: GenericProfile;
   profileVersion: string;
   outputSchema: string;
@@ -121,7 +122,7 @@ export function assertInvocationBoundOutputContract(context: Readonly<PreparedPr
 }
 
 /** Calls the pure adapter with only the immutable prepared Context projection. */
-export function materializeInvocationOutput(context: Readonly<PreparedProfileInvocation>, output: unknown, contract: InvocationBoundOutputContract | undefined): GenericMaterializationCandidate {
+export function materializeInvocationOutput(context: Readonly<PreparedProfileInvocation>, output: unknown, contract: InvocationBoundOutputContract | undefined, legacyWriter = false): GenericMaterializationCandidate {
   assertInvocationBoundOutputContract(context, contract);
   const raw = record(contract.materialize(freeze(context), freeze(output)), "output contract materialization");
   const hasHandoff = Object.hasOwn(raw, "handoff"); const hasWriterArtifact = Object.hasOwn(raw, "writerArtifact");
@@ -136,9 +137,9 @@ export function materializeInvocationOutput(context: Readonly<PreparedProfileInv
   }));
   const handoff = raw["handoff"] === undefined ? undefined : (() => { const value = record(raw["handoff"], "Handoff candidate"); exact(value, ["kind", "payload", "version"], "Handoff candidate"); return Object.freeze({ kind: scalar(value["kind"], "Handoff kind"), version: scalar(value["version"], "Handoff version"), payload: boundedJson(value["payload"], "Handoff payload") }); })();
   const writerArtifact = raw["writerArtifact"] === undefined ? undefined : boundedJson(raw["writerArtifact"], "Writer Artifact candidate");
-  if (context.profile === "WRITER") {
+  if (context.profile === "WRITER" && !legacyWriter) {
     if (writerArtifact === undefined || handoff === undefined || boardEntries.length !== 1 || boardEntries[0]?.entryType !== "ArtifactRef") throw new TypeError("Writer output must produce exactly one Artifact, ArtifactRef, and H2");
-  } else if (writerArtifact !== undefined) throw new TypeError("Reviewer output cannot produce an Artifact");
+  } else if (context.profile !== "WRITER" && writerArtifact !== undefined) throw new TypeError("Reviewer output cannot produce an Artifact");
   return Object.freeze({ boardEntries, ...(handoff === undefined ? {} : { handoff }), ...(writerArtifact === undefined ? {} : { writerArtifact }) });
 }
 
@@ -150,18 +151,23 @@ export function deriveDurableGenericMaterialization(context: Readonly<PreparedPr
     const immutable = { authorId: context.profile, authorType: "AGENT", basedOn: entry.basedOn, contradicts: [], entryType: entry.entryType, instructionAuthority: "NONE", payload: entry.payload, sourceRefs: entry.sourceRefs, status: "CANDIDATE", supersedes: [], trustLevel: "CANDIDATE", visibility: "CASE" };
     return Object.freeze({ ...entry, entryId, contentDigest: digest(immutable) });
   }));
-  const core = { schemaVersion: GENERIC_MATERIALIZATION_SCHEMA_VERSION, profile: context.profile, profileVersion: context.profileVersion, outputSchema: context.outputSchema, contextId: context.contextId, contextDigest: context.contextDigest, invocationId: context.invocationId, attemptId, resultId, caseId: context.caseId, workflowRunId: context.workflowRunId, boardId: context.boardId, batchRevision: context.boardRevision + 1, boardEntries, ...(candidate.writerArtifact === undefined ? {} : { writerArtifact: candidate.writerArtifact }) } as const;
+  const schemaVersion = candidate.writerArtifact === undefined ? GENERIC_MATERIALIZATION_SCHEMA_VERSION : WRITER_MATERIALIZATION_SCHEMA_VERSION;
+  const core = { schemaVersion, profile: context.profile, profileVersion: context.profileVersion, outputSchema: context.outputSchema, contextId: context.contextId, contextDigest: context.contextDigest, invocationId: context.invocationId, attemptId, resultId, caseId: context.caseId, workflowRunId: context.workflowRunId, boardId: context.boardId, batchRevision: context.boardRevision + 1, boardEntries, ...(candidate.writerArtifact === undefined ? {} : { writerArtifact: candidate.writerArtifact }) } as const;
   if (candidate.handoff === undefined) return Object.freeze(core);
   const links = Object.freeze(boardEntries.map(({ entryId, contentDigest }) => Object.freeze({ entryId, contentDigest })));
   const payloadDigest = digest(candidate.handoff.payload);
-  const handoffId = `handoff_${digest({ attemptId, batchRevision: core.batchRevision, boardEntries: links, boardId: context.boardId, caseId: context.caseId, contextDigest: context.contextDigest, contextId: context.contextId, invocationId: context.invocationId, kind: candidate.handoff.kind, outputSchema: context.outputSchema, payloadDigest, profile: context.profile, profileVersion: context.profileVersion, resultId, schemaVersion: GENERIC_MATERIALIZATION_SCHEMA_VERSION, version: candidate.handoff.version, workflowRunId: context.workflowRunId })}` as HandoffId;
+  const handoffId = `handoff_${digest({ attemptId, batchRevision: core.batchRevision, boardEntries: links, boardId: context.boardId, caseId: context.caseId, contextDigest: context.contextDigest, contextId: context.contextId, invocationId: context.invocationId, kind: candidate.handoff.kind, outputSchema: context.outputSchema, payloadDigest, profile: context.profile, profileVersion: context.profileVersion, resultId, schemaVersion: core.schemaVersion, version: candidate.handoff.version, workflowRunId: context.workflowRunId })}` as HandoffId;
   return Object.freeze({ ...core, handoff: Object.freeze({ ...candidate.handoff, handoffId, payloadDigest, boardEntries: links }) });
 }
 
 /** Re-derives the exact generic winner projection stored in its arrival audit. */
 export function parseDurableGenericMaterialization(context: Readonly<PreparedProfileInvocation>, attemptId: AttemptId, resultId: ResultId, value: unknown): DurableGenericMaterialization {
   const raw = record(value, "persisted generic materialization");
-  const keys = ["attemptId", "batchRevision", "boardEntries", "boardId", "caseId", "contextDigest", "contextId", "invocationId", "outputSchema", "profile", "profileVersion", "resultId", "schemaVersion", "workflowRunId", ...(Object.hasOwn(raw, "handoff") ? ["handoff"] : []), ...(Object.hasOwn(raw, "writerArtifact") ? ["writerArtifact"] : [])];
+  const schemaVersion = raw["schemaVersion"];
+  if (schemaVersion !== GENERIC_MATERIALIZATION_SCHEMA_VERSION && schemaVersion !== WRITER_MATERIALIZATION_SCHEMA_VERSION) throw new TypeError("persisted generic materialization version is unsupported");
+  const hasWriterArtifact = Object.hasOwn(raw, "writerArtifact");
+  if (schemaVersion === GENERIC_MATERIALIZATION_SCHEMA_VERSION && hasWriterArtifact || schemaVersion === WRITER_MATERIALIZATION_SCHEMA_VERSION && (context.profile !== "WRITER" || !hasWriterArtifact)) throw new TypeError("persisted Writer Artifact does not match its materialization version");
+  const keys = ["attemptId", "batchRevision", "boardEntries", "boardId", "caseId", "contextDigest", "contextId", "invocationId", "outputSchema", "profile", "profileVersion", "resultId", "schemaVersion", "workflowRunId", ...(Object.hasOwn(raw, "handoff") ? ["handoff"] : []), ...(hasWriterArtifact ? ["writerArtifact"] : [])];
   exact(raw, keys, "persisted generic materialization");
   if (!Array.isArray(raw["boardEntries"])) throw new TypeError("persisted generic Board entries must be an array");
   const candidateEntries = raw["boardEntries"].map((value, index) => { const entry = record(value, `persisted generic Board entry ${index}`); exact(entry, ["basedOn", "contentDigest", "entryId", "entryType", "payload", "sourceRefs"], `persisted generic Board entry ${index}`); return { basedOn: entry["basedOn"], entryType: entry["entryType"], payload: entry["payload"], sourceRefs: entry["sourceRefs"] }; });
@@ -169,7 +175,7 @@ export function parseDurableGenericMaterialization(context: Readonly<PreparedPro
   if (raw["handoff"] !== undefined) { const persisted = record(raw["handoff"], "persisted generic Handoff"); exact(persisted, ["boardEntries", "handoffId", "kind", "payload", "payloadDigest", "version"], "persisted generic Handoff"); handoff = { kind: persisted["kind"] as string, version: persisted["version"] as string, payload: persisted["payload"] as Readonly<Record<string, unknown>> }; }
   const writerArtifact = raw["writerArtifact"] === undefined ? undefined : record(raw["writerArtifact"], "persisted Writer Artifact");
   const replayContract: InvocationBoundOutputContract = { invocationId: context.invocationId, contextDigest: context.contextDigest, profile: context.profile as GenericProfile, profileVersion: context.profileVersion, outputSchema: context.outputSchema, materialize: () => ({ boardEntries: candidateEntries as readonly GenericBoardEntryCandidate[], ...(handoff === undefined ? {} : { handoff }), ...(writerArtifact === undefined ? {} : { writerArtifact }) }) };
-  const derived = deriveDurableGenericMaterialization(context, attemptId, resultId, materializeInvocationOutput(context, undefined, replayContract));
+  const derived = deriveDurableGenericMaterialization(context, attemptId, resultId, materializeInvocationOutput(context, undefined, replayContract, schemaVersion === GENERIC_MATERIALIZATION_SCHEMA_VERSION && context.profile === "WRITER"));
   if (json(derived) !== json(raw)) throw new Error("persisted generic materialization identities, digest, links, or provenance drifted");
   return derived;
 }
