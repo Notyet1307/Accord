@@ -1047,8 +1047,10 @@ function validatedGenericOutputResolution(database: DatabaseSync, prepared: Prep
   if ((accepted !== true && accepted !== false) || (resolutionVersion !== GENERIC_OUTPUT_RESOLUTION_VERSION && resolutionVersion !== WRITER_OUTPUT_RESOLUTION_VERSION) || prepared.profile === "REVIEWER" && resolutionVersion !== GENERIC_OUTPUT_RESOLUTION_VERSION || resolutionVersion === WRITER_OUTPUT_RESOLUTION_VERSION && prepared.profile !== "WRITER" || details["invocationId"] !== prepared.invocationId || details["attemptId"] !== attemptId || details["deliveryNumber"] !== deliveryNumber || details["wireDigest"] !== wireDigestValue || details["contextId"] !== prepared.contextId || details["contextDigest"] !== prepared.contextDigest || details["profile"] !== prepared.profile || details["profileVersion"] !== prepared.profileVersion || details["outputSchema"] !== prepared.outputSchema) throw new Error("generic output resolution immutable tuple is invalid");
   if (!accepted) return Object.freeze({ accepted: false });
   const resolutionCandidate = record(details["candidate"], "generic output resolution candidate");
+  const legacyWriter = prepared.profile === "WRITER" && resolutionVersion === GENERIC_OUTPUT_RESOLUTION_VERSION;
+  if (legacyWriter && Object.hasOwn(resolutionCandidate, "writerArtifact")) throw new Error("legacy Writer output resolution cannot contain an Artifact");
   const replay: InvocationBoundOutputContract = { invocationId: prepared.invocationId, contextDigest: prepared.contextDigest, profile: prepared.profile, profileVersion: prepared.profileVersion, outputSchema: prepared.outputSchema, materialize: () => resolutionCandidate as GenericMaterializationCandidate };
-  const candidate = materializeInvocationOutput(prepared, undefined, replay, prepared.profile === "WRITER" && resolutionVersion === GENERIC_OUTPUT_RESOLUTION_VERSION);
+  const candidate = materializeInvocationOutput(prepared, undefined, replay, legacyWriter);
   if (json(candidate) !== json(details["candidate"])) throw new Error("generic output resolution candidate is not canonical");
   return Object.freeze({ accepted: true, candidate });
 }
