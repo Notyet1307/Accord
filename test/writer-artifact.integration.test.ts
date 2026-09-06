@@ -6,7 +6,7 @@ import test from "node:test";
 import { PROFILE_CONTEXT_REQUEST_VERSION, type ProfileContextDecision } from "../src/contracts/profile-context.js";
 import type { ReviewerDispositionOutput, ReviewerTargetRef } from "../src/contracts/reviewer-disposition.js";
 import { generateR003ResearcherAnalystHandoff, type ReviewerHandoffTarget } from "../src/contracts/researcher-analyst-handoff.js";
-import { deriveRuntimeResultId, deriveSourceId, parseBoardEntryId, type BoardEntryId, type CaseId } from "../src/core/ids.js";
+import { deriveRuntimeAuditCorrelationId, deriveSourceId, parseBoardEntryId, type BoardEntryId, type CaseId } from "../src/core/ids.js";
 import { MagicChatProtocolAdapter } from "../src/magicchat/adapter.js";
 import { AuthorityStartupError, openAuthorityDatabase, type AuthorityDatabase } from "../src/persistence/sqlite-authority.js";
 import { createReviewerDispositionContract, parseReviewerDispositionHandoff } from "../src/reviewer-disposition.js";
@@ -23,7 +23,8 @@ import {
 } from "./fixture.js";
 
 const source = Object.freeze({ content: "Synthetic policy permits a two-week decision window.", locator: "fixture://policy/two-week", observedAt: "2026-08-26T00:01:02.000Z", sourceKind: "SYNTHETIC_FIXTURE" });
-const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(Reflect.get(value, key))])) : value;
+const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value)), "utf8").digest("hex");
 const sourceId = deriveSourceId({ contentDigest: digest(source.content), locator: source.locator, observedAt: source.observedAt, sourceKind: source.sourceKind });
 const metadata = (requestId: string) => ({ deploymentId: "fixture-deployment", modelId: "fixture-model", providerPortVersion: "accord.native-baizhi-provider-port/v1" as const, requestId, responseId: `${requestId}-response` });
 type Row = Record<string, unknown>;
@@ -141,24 +142,29 @@ test("C2 rejects a forged H1 inside the Writer winner transaction", async () => 
 });
 
 test("C2 startup independently refuses accepted Evidence and sealed tuple corruption", async (t) => {
-  for (const mode of ["accepted-row", "sealed-tuple"] as const) await t.test(mode, async () => {
+  for (const mode of ["accepted-row", "candidate-type", "sealed-tuple"] as const) await t.test(mode, async () => {
     const value = await fixture(`c2-${mode}`);
     try {
       const initial = new DatabaseSync(value.temporary.path); const candidateId = candidate(initial, value.caseId); initial.close(); const accepted = value.authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:09.000Z"); value.authority.close();
-      const database = new DatabaseSync(value.temporary.path); const triggerName = mode === "accepted-row" ? "board_entries_immutable_update" : "approved_synthetic_sources_immutable_update"; const trigger = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?").get(triggerName) as Row; database.exec(`DROP TRIGGER ${triggerName}`);
+      const database = new DatabaseSync(value.temporary.path); const triggerName = mode === "sealed-tuple" ? "approved_synthetic_sources_immutable_update" : "board_entries_immutable_update"; const trigger = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?").get(triggerName) as Row; database.exec(`DROP TRIGGER ${triggerName}`);
       if (mode === "accepted-row") database.prepare("UPDATE board_entries SET author_id = 'EVIDENCE_ACCEPTANCE_FORGED' WHERE board_entry_id = ?").run(accepted.entryId);
+      else if (mode === "candidate-type") { const row = database.prepare("SELECT * FROM board_entries WHERE board_entry_id = ?").get(candidateId) as Row; const immutable = { authorId: row["author_id"], authorType: row["author_type"], basedOn: JSON.parse(String(row["based_on_json"])), contradicts: JSON.parse(String(row["contradicts_json"])), entryType: "Proposal", instructionAuthority: row["instruction_authority"], payload: JSON.parse(String(row["payload_json"])), sourceRefs: JSON.parse(String(row["source_refs_json"])), status: row["status"], supersedes: JSON.parse(String(row["supersedes_json"])), trustLevel: row["trust_level"], visibility: row["visibility"] }; database.prepare("UPDATE board_entries SET entry_type = 'Proposal', content_digest = ? WHERE board_entry_id = ?").run(digest(immutable), candidateId); }
       else database.prepare("UPDATE approved_synthetic_sources SET locator = 'fixture://policy/forged'").run();
       database.exec(String(trigger["sql"])); database.close();
-      assert.throws(() => openAuthorityDatabase(value.temporary.path), (error: unknown) => error instanceof AuthorityStartupError && /accepted EvidenceRef|approved synthetic source manifest member|persisted approved sources/u.test(error.message));
+      assert.throws(() => openAuthorityDatabase(value.temporary.path), (error: unknown) => error instanceof AuthorityStartupError && /accepted EvidenceRef|approved synthetic source manifest member|persisted approved sources|Researcher materialization|Invocation context entry digest/u.test(error.message));
     } finally { try { value.authority.close(); } catch {} value.temporary.cleanup(); }
   });
 });
 
-test("historical Writer generic v1 materialization remains byte-compatible", async () => {
-  const value = await fixture("c2-writer-v1");
+test("schema 9 Writer generic v1 winner upgrades and reopens without manufacturing an Artifact", async () => {
+  const value = await fixture("c2-writer-v1"); let authority = value.authority;
   try {
-    const writer = value.authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:08.000Z", profile: "WRITER" }); const attempt = value.authority.beginPreparedAttempt(writer.invocationId, "2026-08-26T00:01:08.000Z"); const resultId = deriveRuntimeResultId({ invocationId: writer.invocationId, attemptId: attempt.attemptId, outputDigest: "1".repeat(64) }); const reference = writer.entries[0]; assert.ok(reference);
-    const historical = deriveDurableGenericMaterialization(writer, attempt.attemptId, resultId, { boardEntries: [{ entryType: "Critique", payload: { text: "historical Writer output" }, basedOn: [reference.id], sourceRefs: [] }], handoff: { kind: "writer-handoff", version: "v1", payload: { text: "historical Writer output" } } }); const bytes = JSON.stringify(historical);
-    assert.equal(historical.schemaVersion, GENERIC_MATERIALIZATION_SCHEMA_VERSION); assert.equal("writerArtifact" in historical, false); assert.equal(JSON.stringify(parseDurableGenericMaterialization(writer, attempt.attemptId, resultId, JSON.parse(bytes))), bytes);
-  } finally { try { value.authority.close(); } catch {} value.temporary.cleanup(); }
+    const initial = new DatabaseSync(value.temporary.path); const candidateId = candidate(initial, value.caseId); initial.close(); const accepted = authority.acceptSyntheticEvidence(candidateId, "2026-08-26T00:01:09.000Z");
+    const writer = authority.prepareProfileInvocation({ caseId: value.caseId, modelId: "fixture-model", now: "2026-08-26T00:01:11.000Z", profile: "WRITER" }); const setup = new DatabaseSync(value.temporary.path); const reviewer = reconstructGenericWinnerMaterialization(setup, value.reviewer.invocationId); assert.ok(reviewer); const contract = createWriterArtifactContract(setup, writer, parseReviewerDispositionHandoff(reviewer)); setup.close();
+    const winner = await authority.executePreparedAttempt(writer, { outputContract: contract, complete: () => wire({ materialAssertions: [{ statement: source.content, basisEntryId: accepted.entryId }] }, "c2-writer-v1", "2026-08-26T00:01:12.000Z") }, "2026-08-26T00:01:11.000Z"); assert.equal(winner.outcome, "WINNER"); assert.ok(winner.materialization?.handoff);
+    const historicalCandidate = { boardEntries: winner.materialization.boardEntries.map(({ entryType, payload, basedOn, sourceRefs }) => ({ entryType, payload, basedOn, sourceRefs })), handoff: { kind: winner.materialization.handoff.kind, version: winner.materialization.handoff.version, payload: winner.materialization.handoff.payload } }; const historical = deriveDurableGenericMaterialization(writer, winner.attemptId, winner.resultId, historicalCandidate); const historicalBytes = JSON.stringify(historical); assert.equal(historical.schemaVersion, GENERIC_MATERIALIZATION_SCHEMA_VERSION); assert.equal("writerArtifact" in historical, false); assert.equal(JSON.stringify(parseDurableGenericMaterialization(writer, winner.attemptId, winner.resultId, JSON.parse(historicalBytes))), historicalBytes);
+    authority.close(); const schema9 = new DatabaseSync(value.temporary.path); const correlationId = deriveRuntimeAuditCorrelationId(writer.invocationId); const arrivalAudit = schema9.prepare("SELECT audit_event_id, details_json FROM audit_events WHERE correlation_id = ? AND event_kind GLOB 'RUNTIME_RESULT:WINNER:*'").get(correlationId) as Row; const arrivalDetails = JSON.parse(String(arrivalAudit["details_json"])) as Row; schema9.prepare("UPDATE audit_events SET details_json = ? WHERE audit_event_id = ?").run(JSON.stringify(canonical({ ...arrivalDetails, materialization: historical })), String(arrivalAudit["audit_event_id"]));
+    const resolutionAudit = schema9.prepare("SELECT audit_event_id, details_json FROM audit_events WHERE correlation_id = ? AND event_kind GLOB 'RUNTIME_GENERIC_OUTPUT_RESOLUTION:*'").get(correlationId) as Row; const resolutionDetails = JSON.parse(String(resolutionAudit["details_json"])) as Row; schema9.prepare("UPDATE audit_events SET details_json = ? WHERE audit_event_id = ?").run(JSON.stringify(canonical({ ...resolutionDetails, schemaVersion: "accord.runtime-generic-output-resolution/v1", candidate: historicalCandidate })), String(resolutionAudit["audit_event_id"])); schema9.exec("DROP TABLE artifacts"); schema9.prepare("DELETE FROM accord_schema_migrations WHERE version = 10").run(); schema9.exec("PRAGMA user_version = 9"); schema9.close();
+    authority = openAuthorityDatabase(value.temporary.path); authority.close(); authority = openAuthorityDatabase(value.temporary.path); const upgraded = new DatabaseSync(value.temporary.path); assert.equal((upgraded.prepare("PRAGMA user_version").get() as Row)["user_version"], 10); assert.equal((upgraded.prepare("SELECT count(*) AS count FROM artifacts").get() as Row)["count"], 0); const reconstructed = reconstructGenericWinnerMaterialization(upgraded, writer.invocationId); assert.equal(JSON.stringify(reconstructed), historicalBytes); upgraded.close();
+  } finally { try { authority.close(); } catch {} value.temporary.cleanup(); }
 });
