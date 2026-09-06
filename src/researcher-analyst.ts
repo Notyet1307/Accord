@@ -1017,6 +1017,7 @@ function recordContractRejection(database: DatabaseSync, prepared: PreparedProfi
 
 type GenericOutputResolution = Readonly<{ accepted: false }> | Readonly<{ accepted: true; candidate: GenericMaterializationCandidate }>;
 const GENERIC_OUTPUT_RESOLUTION_VERSION = "accord.runtime-generic-output-resolution/v1" as const;
+const WRITER_OUTPUT_RESOLUTION_VERSION = "accord.runtime-generic-output-resolution/v2" as const;
 
 function resolveGenericOutput(prepared: PreparedProfileInvocation, value: ProviderWire, contract: InvocationBoundOutputContract): GenericOutputResolution {
   const parsed = parseProviderWire(value);
@@ -1042,10 +1043,14 @@ function validatedGenericOutputResolution(database: DatabaseSync, prepared: Prep
   const details = record(JSON.parse(string(audit["details_json"], "generic output resolution audit", GENERIC_AUDIT_JSON_MAX_CHARS)) as unknown, "generic output resolution audit");
   const accepted = details["accepted"];
   exact(details, ["accepted", "attemptId", "contextDigest", "contextId", "deliveryNumber", "invocationId", "outputSchema", "profile", "profileVersion", "schemaVersion", "wireDigest", ...(accepted === true ? ["candidate"] : [])], "generic output resolution audit");
-  if ((accepted !== true && accepted !== false) || details["schemaVersion"] !== GENERIC_OUTPUT_RESOLUTION_VERSION || details["invocationId"] !== prepared.invocationId || details["attemptId"] !== attemptId || details["deliveryNumber"] !== deliveryNumber || details["wireDigest"] !== wireDigestValue || details["contextId"] !== prepared.contextId || details["contextDigest"] !== prepared.contextDigest || details["profile"] !== prepared.profile || details["profileVersion"] !== prepared.profileVersion || details["outputSchema"] !== prepared.outputSchema) throw new Error("generic output resolution immutable tuple is invalid");
+  const resolutionVersion = details["schemaVersion"];
+  if ((accepted !== true && accepted !== false) || (resolutionVersion !== GENERIC_OUTPUT_RESOLUTION_VERSION && resolutionVersion !== WRITER_OUTPUT_RESOLUTION_VERSION) || prepared.profile === "REVIEWER" && resolutionVersion !== GENERIC_OUTPUT_RESOLUTION_VERSION || resolutionVersion === WRITER_OUTPUT_RESOLUTION_VERSION && prepared.profile !== "WRITER" || details["invocationId"] !== prepared.invocationId || details["attemptId"] !== attemptId || details["deliveryNumber"] !== deliveryNumber || details["wireDigest"] !== wireDigestValue || details["contextId"] !== prepared.contextId || details["contextDigest"] !== prepared.contextDigest || details["profile"] !== prepared.profile || details["profileVersion"] !== prepared.profileVersion || details["outputSchema"] !== prepared.outputSchema) throw new Error("generic output resolution immutable tuple is invalid");
   if (!accepted) return Object.freeze({ accepted: false });
-  const replay: InvocationBoundOutputContract = { invocationId: prepared.invocationId, contextDigest: prepared.contextDigest, profile: prepared.profile, profileVersion: prepared.profileVersion, outputSchema: prepared.outputSchema, materialize: () => details["candidate"] as GenericMaterializationCandidate };
-  const candidate = materializeInvocationOutput(prepared, undefined, replay);
+  const resolutionCandidate = record(details["candidate"], "generic output resolution candidate");
+  const legacyWriter = prepared.profile === "WRITER" && resolutionVersion === GENERIC_OUTPUT_RESOLUTION_VERSION;
+  if (legacyWriter && Object.hasOwn(resolutionCandidate, "writerArtifact")) throw new Error("legacy Writer output resolution cannot contain an Artifact");
+  const replay: InvocationBoundOutputContract = { invocationId: prepared.invocationId, contextDigest: prepared.contextDigest, profile: prepared.profile, profileVersion: prepared.profileVersion, outputSchema: prepared.outputSchema, materialize: () => resolutionCandidate as GenericMaterializationCandidate };
+  const candidate = materializeInvocationOutput(prepared, undefined, replay, legacyWriter);
   if (json(candidate) !== json(details["candidate"])) throw new Error("generic output resolution candidate is not canonical");
   return Object.freeze({ accepted: true, candidate });
 }
@@ -1123,7 +1128,7 @@ function persistOpaqueCompletionReceipt(database: DatabaseSync, input: Readonly<
     if (input.generic !== undefined) {
       const { prepared, resolution } = input.generic;
       if ((prepared.profile !== "REVIEWER" && prepared.profile !== "WRITER") || prepared.invocationId !== input.invocationId) throw new Error("generic output resolution is not bound to its Invocation");
-      const details = { accepted: resolution.accepted, attemptId: input.attemptId, contextDigest: prepared.contextDigest, contextId: prepared.contextId, deliveryNumber, invocationId: prepared.invocationId, outputSchema: prepared.outputSchema, profile: prepared.profile, profileVersion: prepared.profileVersion, schemaVersion: GENERIC_OUTPUT_RESOLUTION_VERSION, wireDigest: wireDigestValue, ...(resolution.accepted ? { candidate: resolution.candidate } : {}) };
+      const details = { accepted: resolution.accepted, attemptId: input.attemptId, contextDigest: prepared.contextDigest, contextId: prepared.contextId, deliveryNumber, invocationId: prepared.invocationId, outputSchema: prepared.outputSchema, profile: prepared.profile, profileVersion: prepared.profileVersion, schemaVersion: prepared.profile === "WRITER" ? WRITER_OUTPUT_RESOLUTION_VERSION : GENERIC_OUTPUT_RESOLUTION_VERSION, wireDigest: wireDigestValue, ...(resolution.accepted ? { candidate: resolution.candidate } : {}) };
       database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at) VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)`)
         .run(genericResolutionAuditId(input.attemptId, deliveryNumber), deriveRuntimeAuditCorrelationId(prepared.invocationId), genericResolutionEventKind(input.attemptId, deliveryNumber), prepared.caseId, prepared.boardId, prepared.workflowRunId, json(details), input.trustedReceivedAt);
     }
