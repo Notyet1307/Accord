@@ -6,11 +6,13 @@ import test from "node:test";
 
 import { RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION, REVIEWER_WRITER_MIGRATION_ID, REVIEWER_WRITER_MIGRATION_SHA256, REVIEWER_WRITER_SCHEMA_FINGERPRINT, DATABASE_SCHEMA_VERSION } from "../../src/contracts/versions.js";
 import { R003_RESEARCHER_ANALYST_HANDOFF } from "../../src/contracts/researcher-analyst-handoff.js";
+import { normalizeSyntheticIntake } from "../../src/contracts/intake.js";
 import { loadAuthorityMigrations } from "../../src/persistence/migration.js";
 import { openAuthorityDatabase } from "../../src/persistence/sqlite-authority.js";
-import { temporaryDatabase } from "../fixture.js";
+import { SYNTHETIC_INTAKE, temporaryDatabase } from "../fixture.js";
 import { deriveProfileInvocationId, parseBoardId, parseCaseId, parseWorkflowRunId } from "../../src/core/ids.js";
 import { persistFixedProfileContext, readFixedProfileContext, REVIEWER_OUTPUT_SCHEMA, REVIEWER_PROFILE_VERSION, WRITER_OUTPUT_SCHEMA, WRITER_PROFILE_VERSION } from "../../src/profile-context.js";
+import { prepareProfileInvocation } from "../../src/researcher-analyst.js";
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -82,17 +84,16 @@ test("O01 schema 9 migration is pinned and restart-stable", () => {
     assert.equal(migration.sha256, REVIEWER_WRITER_MIGRATION_SHA256);
     assert.equal(migration.schemaFingerprint, REVIEWER_WRITER_SCHEMA_FINGERPRINT);
 
-    const first = openAuthorityDatabase(temporary.path);
-    first.close();
-    const reopened = openAuthorityDatabase(temporary.path);
-    reopened.close();
+    const seeded = openAuthorityDatabase(temporary.path); const created = seeded.processSyntheticIntake(normalizeSyntheticIntake(SYNTHETIC_INTAKE)); seeded.close();
+    const schema9 = new DatabaseSync(temporary.path); const { caseId, workflowRunId } = created; schema9.prepare("UPDATE workflow_runs SET state = 'REVIEWER' WHERE workflow_run_id = ?").run(workflowRunId); const prepared = prepareProfileInvocation(schema9, { caseId, modelId: "model", now: "2026-09-04T00:00:00.000Z", profile: "REVIEWER" }); const persisted = readFixedProfileContext(schema9, prepared.invocationId); assert.ok(persisted); schema9.exec("DROP TABLE artifacts"); schema9.prepare("DELETE FROM accord_schema_migrations WHERE version = 10").run(); schema9.exec("PRAGMA user_version = 9"); schema9.close();
+    const first = openAuthorityDatabase(temporary.path); first.close(); const reopened = openAuthorityDatabase(temporary.path); reopened.close();
 
     const rows = new DatabaseSync(temporary.path);
     try {
       const migrationRow = rows.prepare("SELECT count(*) AS count FROM accord_schema_migrations WHERE version = 9 AND migration_id = ? AND migration_sha256 = ? AND schema_fingerprint = ?").get(REVIEWER_WRITER_MIGRATION_ID, REVIEWER_WRITER_MIGRATION_SHA256, REVIEWER_WRITER_SCHEMA_FINGERPRINT) as Record<string, unknown>;
-      assert.equal(migrationRow["count"], 1);
+      assert.equal(migrationRow["count"], 1); assert.deepEqual(readFixedProfileContext(rows, prepared.invocationId), persisted);
       const contextRow = rows.prepare("SELECT count(*) AS count FROM profile_contexts WHERE node_id IN ('REVIEWER', 'WRITER')").get() as Record<string, unknown>;
-      assert.equal(contextRow["count"], 0);
+      assert.equal(contextRow["count"], 1);
       const contextSchemaRow = rows.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'profile_contexts'").get() as Record<string, unknown>;
       const contextSchema = contextSchemaRow["sql"];
       if (typeof contextSchema !== "string") throw new Error("profile_contexts schema is missing");
