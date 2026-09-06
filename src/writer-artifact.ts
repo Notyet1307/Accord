@@ -155,11 +155,12 @@ function acceptedEvidence(database: DatabaseSync, context: PreparedProfileInvoca
 
 /** Revalidates every durable accepted EvidenceRef independently of Writer completion. */
 export function validatePersistedAcceptedEvidence(database: DatabaseSync): void {
-  const acceptedRows = database.prepare(`SELECT * FROM board_entries WHERE entry_type = 'EvidenceRef'
-    AND (author_type = 'SYSTEM' OR author_id = ? OR status = 'ACCEPTED' OR trust_level = 'VERIFIED') ORDER BY board_entry_id`).all(EVIDENCE_ACCEPTANCE_AUTHOR) as readonly Row[];
-  if (acceptedRows.length === 0) return;
+  const acceptedRows = database.prepare(`SELECT * FROM board_entries WHERE author_id = ? OR (entry_type = 'EvidenceRef'
+    AND (author_type = 'SYSTEM' OR status = 'ACCEPTED' OR trust_level = 'VERIFIED')) ORDER BY board_entry_id`).all(EVIDENCE_ACCEPTANCE_AUTHOR) as readonly Row[];
   const sources = sealedSources(database); const manifest = database.prepare("SELECT manifest_digest FROM approved_synthetic_source_manifests WHERE manifest_id = 'source_manifest_r003_v1'").get() as Row; const manifestDigest = hex(manifest["manifest_digest"], "source manifest digest");
+  const validatedAuditIds = new Set<string>();
   for (const accepted of acceptedRows) {
+    if (accepted["entry_type"] !== "EvidenceRef") throw new Error("accepted EvidenceRef entry type is invalid");
     const supersedes = JSON.parse(String(accepted["supersedes_json"])) as unknown; if (!Array.isArray(supersedes) || supersedes.length !== 1) throw new Error("accepted EvidenceRef must supersede exactly one candidate"); const candidateId = parseBoardEntryId(supersedes[0]);
     const candidate = database.prepare(`SELECT entry.*, board.revision AS board_revision, workflow.workflow_run_id, result.result_id, invocation.invocation_id, invocation.status AS invocation_status
       FROM board_entries entry JOIN boards board ON board.board_id = entry.board_id AND board.case_id = entry.case_id
@@ -175,7 +176,10 @@ export function validatePersistedAcceptedEvidence(database: DatabaseSync): void 
     const successorCount = database.prepare("SELECT count(*) AS count FROM board_entries entry, json_each(entry.supersedes_json) link WHERE link.value = ?").get(candidateId) as Row; const later = database.prepare("SELECT 1 AS present FROM board_entries entry, json_each(entry.supersedes_json) link WHERE link.value = ? LIMIT 1").get(entryId);
     const audit = database.prepare("SELECT * FROM audit_events WHERE audit_event_id = ?").get(deriveEvidenceAcceptanceAuditEventId(entryId)) as Row | undefined; const expectedDetails = json({ candidateEntryId: candidateId, entryId, manifestDigest, sourceId: payload.sourceId });
     if (successorCount["count"] !== 1 || later !== undefined || audit === undefined || audit["schema_version"] !== "accord.audit-event/v1" || audit["correlation_id"] !== deriveRuntimeAuditCorrelationId(String(candidate["invocation_id"]) as PreparedProfileInvocation["invocationId"]) || audit["event_kind"] !== "EVIDENCE_ACCEPTED" || audit["case_id"] !== accepted["case_id"] || audit["board_id"] !== accepted["board_id"] || audit["workflow_run_id"] !== candidate["workflow_run_id"] || audit["receipt_id"] !== null || audit["details_json"] !== expectedDetails || audit["recorded_at"] !== accepted["created_at"]) throw new Error("accepted EvidenceRef audit or successor authority is invalid");
+    validatedAuditIds.add(String(audit["audit_event_id"]));
   }
+  const acceptanceAudits = database.prepare("SELECT audit_event_id FROM audit_events WHERE event_kind = 'EVIDENCE_ACCEPTED' ORDER BY audit_event_id").all() as readonly Row[];
+  if (acceptanceAudits.length !== validatedAuditIds.size || acceptanceAudits.some((audit) => !validatedAuditIds.has(String(audit["audit_event_id"])))) throw new Error("accepted EvidenceRef audit is orphaned");
 }
 
 /** Builds the sole fixed Writer output contract from current accepted authority. */
