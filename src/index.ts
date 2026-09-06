@@ -32,6 +32,12 @@ export {
   createReviewerDispositionContract,
   parseReviewerDispositionHandoff,
 } from "./reviewer-disposition.js";
+export {
+  ARTIFACT_SCHEMA_VERSION,
+  WRITER_ARTIFACT_HANDOFF_KIND,
+  WRITER_ARTIFACT_HANDOFF_VERSION,
+  type AcceptedEvidenceRef,
+} from "./writer-artifact.js";
 export { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "./contracts/intake.js";
 export {
   ANALYST_OUTPUT_SCHEMA,
@@ -68,6 +74,7 @@ export type {
   AuditCorrelationId,
   AuditEventId,
   ArrivalId,
+  ArtifactId,
   AttemptId,
   BoardEntryId,
   BoardId,
@@ -86,6 +93,9 @@ export type {
   ResponseId,
 } from "./core/ids.js";
 export {
+  deriveAcceptedEvidenceEntryId,
+  deriveArtifactId,
+  parseArtifactId,
   deriveSourceId,
   parseArrivalId,
   parseAttemptId,

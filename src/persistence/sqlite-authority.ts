@@ -10,6 +10,8 @@ import {
   parseMagicChatInstant,
   type NormalizedMagicChatMessageCreated,
 } from "../contracts/magicchat.js";
+import type { ReviewerDispositionHandoff } from "../contracts/reviewer-disposition.js";
+import { parseReviewerDispositionHandoff } from "../reviewer-disposition.js";
 import {
   CONTRACT_VERSIONS,
   CORE_TRANSACTION_AUTHORITY_TABLES,
@@ -53,6 +55,7 @@ import {
   type AuditCorrelationId,
   type AuditEventId,
   type BoardId,
+  type BoardEntryId,
   type CaseId,
   type InboxDeliveryId,
   type InboxReceiptId,
@@ -81,6 +84,9 @@ import {
   recoverReceivedRuntimeAttempts,
   prepareProfileInvocation,
   recordUnknownRuntimeArrival,
+  reconstructGenericWinnerMaterialization,
+  reconstructPreparedProfileInvocation,
+  reconstructReviewerDispositionHandoff,
   reconstructWinnerBoardEntries,
   validateLegacyRuntimeDeliveryChronology,
   validatePersistedRuntimeAuthorityGraph,
@@ -99,6 +105,8 @@ import {
   type FixedProfileContextInput,
   type PersistedFixedProfileContext,
 } from "../profile-context.js";
+import { acceptSyntheticEvidence, createWriterArtifactContract, parseWriterArtifactAuthority, validatePersistedAcceptedEvidence, type AcceptedEvidenceRef } from "../writer-artifact.js";
+import { WRITER_MATERIALIZATION_SCHEMA_VERSION, type InvocationBoundOutputContract } from "../profile-runtime.js";
 import {
   parsePersistenceRow,
   requireHexDigest,
@@ -162,6 +170,7 @@ const REQUIRED_SCHEMA_OBJECTS = [
   "runtime_result_entries",
   "approved_synthetic_source_manifests",
   "runtime_provider_deliveries",
+  "artifacts",
   "runtime_delivery_arrivals",
   "runtime_opaque_completion_receipts",
   "runtime_provider_delivery_legacy_provenance",
@@ -432,8 +441,8 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       throw new Error(`unsupported database schema version ${version}; expected ${latestMigration.version}`);
     }
     validateAppliedSchema(database, migrations.slice(0, appliedIndex + 1));
-    if (version === 8) {
-      /* Schema 9 only widens a valid legacy graph; it never repairs one. */
+    if (version === 8 || version === 9) {
+      /* Additive schema upgrades never repair an invalid legacy graph. */
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
     }
@@ -463,11 +472,15 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validateLegacyRuntimeReconciliation(database);
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
+      validatePersistedAcceptedEvidence(database);
+      validatePersistedWriterArtifacts(database);
       recoverOpaqueCompletionReceipts(database);
       recoverReceivedRuntimeAttempts(database);
       reconcileInterruptedRuntimeAttempts(database);
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
+      validatePersistedAcceptedEvidence(database);
+      validatePersistedWriterArtifacts(database);
       checkDatabaseHealth(database);
       database.exec("COMMIT");
     } catch (error) {
@@ -485,16 +498,36 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
     try {
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
+      validatePersistedAcceptedEvidence(database);
+      validatePersistedWriterArtifacts(database);
       recoverOpaqueCompletionReceipts(database);
       recoverReceivedRuntimeAttempts(database);
       reconcileInterruptedRuntimeAttempts(database);
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
+      validatePersistedAcceptedEvidence(database);
+      validatePersistedWriterArtifacts(database);
       database.exec("COMMIT");
     } catch (error) {
       rollbackAfterFailure(database, error);
     }
   }
+}
+
+function validatePersistedWriterArtifacts(database: DatabaseSync): void {
+  const winners = database.prepare(`SELECT invocation.invocation_id, result.result_id, arrival.recorded_at
+    FROM runtime_invocations invocation JOIN runtime_results result ON result.invocation_id = invocation.invocation_id
+    JOIN runtime_result_arrivals arrival ON arrival.result_id = result.result_id AND arrival.outcome = 'WINNER'
+    WHERE invocation.node_id = 'WRITER' AND invocation.status = 'RESULT_COMMITTED' ORDER BY result.result_id`).all() as readonly Record<string, unknown>[];
+  const artifacts = database.prepare("SELECT * FROM artifacts ORDER BY artifact_id, artifact_revision").all() as readonly Record<string, unknown>[]; let currentWinners = 0;
+  for (const winner of winners) {
+    const invocationId = parseInvocationId(winner["invocation_id"]); const resultId = parseResultId(winner["result_id"]); const context = reconstructPreparedProfileInvocation(database, invocationId); const materialization = reconstructGenericWinnerMaterialization(database, invocationId);
+    if (materialization === undefined) throw new Error("persisted Writer winner lacks its materialization");
+    if (materialization.schemaVersion !== WRITER_MATERIALIZATION_SCHEMA_VERSION) { if (artifacts.some((row) => row["source_result_id"] === resultId)) throw new Error("historical Writer v1 winner cannot own a C2 Artifact"); continue; }
+    currentWinners += 1; const carrier = materialization.writerArtifact; if (carrier === undefined) throw new Error("Writer v2 winner lacks its Artifact carrier"); const authoritativeH1 = reconstructReviewerDispositionHandoff(database, parseResultId(carrier["reviewerResultId"])); const expected = parseWriterArtifactAuthority(database, context, materialization, authoritativeH1); const row = artifacts.find((candidate) => candidate["source_result_id"] === resultId);
+    if (row === undefined || row["schema_version"] !== CONTRACT_VERSIONS.artifact || row["artifact_id"] !== expected.artifactId || row["artifact_revision"] !== 1 || row["case_id"] !== context.caseId || row["workflow_run_id"] !== context.workflowRunId || row["board_id"] !== context.boardId || row["source_invocation_id"] !== context.invocationId || row["reviewer_result_id"] !== expected.reviewerResultId || row["reviewer_handoff_id"] !== expected.reviewerHandoffId || row["reviewer_handoff_json"] !== JSON.stringify(canonicalJson(expected.reviewerHandoff)) || row["content_markdown"] !== expected.contentMarkdown || row["content_digest"] !== expected.contentDigest || row["material_assertions_json"] !== JSON.stringify(canonicalJson(expected.materialAssertions)) || row["manifest_digest"] !== expected.manifestDigest || row["artifact_digest"] !== expected.artifactDigest || row["created_board_revision"] !== materialization.batchRevision || row["created_at"] !== winner["recorded_at"]) throw new Error("persisted Artifact authority drifted from its Writer winner");
+  }
+  if (artifacts.length !== currentWinners) throw new Error("persisted Artifact authority does not correspond one-to-one with Writer v2 winners");
 }
 
 /** v3 stored complete frozen source snapshots in Contexts; seal that exact set once. */
@@ -3579,6 +3612,12 @@ export class AuthorityDatabase {
     return installTrustedSyntheticSourceManifest(this.#database, installedAt);
   }
 
+  public acceptSyntheticEvidence(candidateEntryId: BoardEntryId, acceptedAt: string): AcceptedEvidenceRef {
+    this.#assertOpen();
+    installTrustedSyntheticSourceManifest(this.#database, acceptedAt);
+    return acceptSyntheticEvidence(this.#database, candidateEntryId, acceptedAt);
+  }
+
   public inspectSyntheticIntake(appId: unknown, cursor: unknown): PersistedIntakeAuthority | undefined {
     this.#assertOpen();
     const [validatedAppId, validatedCursor] = validateInspectionKey(appId, cursor);
@@ -3673,6 +3712,15 @@ export class AuthorityDatabase {
   public prepareProfileInvocation(input: ProfileInvocationRequest): PreparedProfileInvocation {
     this.#assertOpen();
     return prepareProfileInvocation(this.#database, input);
+  }
+
+  public createWriterArtifactContract(invocation: PreparedProfileInvocation, h1: ReviewerDispositionHandoff): InvocationBoundOutputContract {
+    this.#assertOpen();
+    const materialization = reconstructGenericWinnerMaterialization(this.#database, h1.invocationId);
+    if (materialization === undefined) throw new TypeError("Writer H1 has no durable Reviewer winner");
+    const exactH1 = parseReviewerDispositionHandoff(materialization);
+    if (JSON.stringify(exactH1) !== JSON.stringify(h1)) throw new TypeError("Writer H1 does not match durable Reviewer authority");
+    return createWriterArtifactContract(this.#database, invocation, exactH1);
   }
 
   /** Atomically claims one persisted Attempt; callers invoke a port only after this returns. */

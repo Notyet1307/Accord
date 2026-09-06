@@ -249,6 +249,7 @@ run_node_restricted --test-isolation=none --test dist/test/reviewer-disposition.
 run_node_restricted --test-isolation=none --test dist/test/contracts.test.js
 run_node_restricted --test-isolation=none --test dist/test/sqlite-startup.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/researcher-analyst.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/writer-artifact.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js

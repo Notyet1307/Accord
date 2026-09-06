@@ -129,7 +129,7 @@ test("the checked-in handoff exactly matches executable contract and migration f
   assert.deepEqual(handoffFile, R003_CORE_HANDOFF);
   assert.equal(serializeR003CoreHandoff(), `HANDOFF ${JSON.stringify(handoffFile)}`);
   assert.equal(R003_CORE_HANDOFF.databaseSchemaVersion, CORE_DATABASE_SCHEMA_VERSION);
-  assert.equal(DATABASE_SCHEMA_VERSION, 9);
+  assert.equal(DATABASE_SCHEMA_VERSION, 10);
   assert.equal(R003_CORE_HANDOFF.fixedWorkflowDefinition, FIXED_WORKFLOW_DEFINITION);
   assert.deepEqual(R003_CORE_HANDOFF.transactionAuthority, CORE_TRANSACTION_AUTHORITY_TABLES);
   assert.equal(TRANSACTION_AUTHORITY_TABLES.includes("magicchat_inbox_states"), true);
