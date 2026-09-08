@@ -1,19 +1,19 @@
 # Repository authority and execution discipline
 
-This file contains global, non-discoverable invariants for people and AI working in this repository. It does not replace an Accepted Release, Delivery Spec, Ticket, ADR, current code, configuration, types, tests, GitHub, or the configured Harness.
+This file contains global, non-discoverable invariants for people and AI working in this repository. It does not replace an Accepted Release, versioned Spec, ADR, current code, configuration, types, tests, GitHub, or actual execution records.
 
 ## 1. Authority by concern
 
 Use the owner for the concern being decided:
 
-- Current task behavior comes from the Accepted Release, Delivery Spec, or Ticket.
+- Current task behavior comes from one versioned repository Spec within the Accepted Release and applicable ADRs; the GitHub Issue points to it rather than carrying a second Spec.
 - Current implementation facts come from code, configuration, types, migrations, schemas, and tests at the task base.
 - Load-bearing technical decisions come from applicable Accepted ADRs.
 - Global non-discoverable invariants come from this file.
 - Long-term product direction comes from `docs/product/VISION.md`.
 - External-project facts and design comparisons come from dated research under `docs/product/research/`.
 - Current Issue, PR, Label, dependency, Commit, CI, and Merge facts come from GitHub.
-- Current Delivery Attempt, Reviewer, recovery, and execution facts come from the configured Harness.
+- Current development execution facts come from actual OMP tool, command, and review records; the PR binds that evidence to its exact code and Spec revisions. A separately selected execution system owns only its own actual records.
 - MagicChat owns enterprise identity, conversation, message, App, and user-visible interaction facts.
 - External enterprise systems own their business objects and confirmed outcomes.
 
@@ -47,7 +47,7 @@ Research alone never authorizes implementation.
 
 ### Delivery planning and execution
 
-Before creating or changing delivery issues, ready labels, dependencies, Admission state, or Harness routing, read:
+Before preparing a Spec, changing a delivery Issue or PR, implementing, publishing, or merging, read:
 
 - `docs/agents/delivery-gate.md`;
 - `docs/agents/issue-tracker.md`;
@@ -56,7 +56,7 @@ Before creating or changing delivery issues, ready labels, dependencies, Admissi
 
 ### Small implementation task
 
-Do not load the full Vision by default. Read the Ticket, relevant ADR, current code, tests, and the narrowest applicable section of this file.
+Do not load the full Vision by default. Read the Issue's versioned Spec, relevant ADR, current code, tests, and the narrowest applicable section of this file. Follow the explicit scoped authorization and evidence rules in `docs/agents/delivery-gate.md`.
 
 ## 3. Product and authority invariants
 
@@ -195,7 +195,7 @@ When using Lody, Cumora, Hermes, Cairn, MagicChat, or another external project:
 
 ## 9. Ticket and change discipline
 
-Every implementation Ticket must identify:
+The versioned Spec must identify the implementation contract below; the single GitHub task entry links to it without duplicating these fields:
 
 ```text
 Objective
@@ -214,7 +214,7 @@ Acceptance tests
 Evidence to return
 ```
 
-A Ticket should normally modify one primary owner and one primary seam. Avoid combining schema, router, Runtime, UI, security, deployment, and broad refactoring in one Ticket.
+An authorized change should normally modify one primary owner and one primary seam. Avoid combining schema, router, Runtime, UI, security, deployment, and broad refactoring in one change.
 
 Any enabler must name its concrete consumer and removal condition. Do not build a generic Runtime, Event Bus, Workflow DSL, Memory, Graph engine, Agent Marketplace, or multi-cloud abstraction for hypothetical use.
 
@@ -236,7 +236,7 @@ Stop scope expansion and return a decision when:
 
 ## 11. Completion evidence
 
-Return:
+Bind completion evidence to the PR head SHA and exact Spec revision as defined in `docs/agents/delivery-gate.md`; distinguish CI from operator-owned qualification. Return:
 
 - behavior changed;
 - behavior deliberately unchanged;

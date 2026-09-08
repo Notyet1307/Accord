@@ -59,6 +59,12 @@ cleanup_ci_state() {
 trap 'status=$?; cleanup_ci_state; exit "$status"' 0
 trap 'exit 1' 1 2 15
 
+env -i \
+  PATH="${PATH:-}" \
+  TMPDIR="$CI_TEST_TMPDIR" \
+  LANG=C.UTF-8 \
+  "$NODE_BIN" dist/src/handoff.js
+
 CI_DENIED_DIR=$(mktemp -d "$CI_TEMP_PARENT/accord-r003-ci-denied.XXXXXX") \
   || fail "a denied-read CI regression directory is required"
 CI_DENIED_FILE=$CI_DENIED_DIR/denied-read-canary
@@ -80,4 +86,4 @@ env -i \
 
 "$NPM_BIN" run test:conformance
 
-printf '%s\n' "PASS $CI_VALIDATION_KIND CI typecheck, contract, integration, capability, and conformance suites"
+printf '%s\n' "PASS $CI_VALIDATION_KIND CI typecheck, handoff, contract, integration, capability, and conformance suites"

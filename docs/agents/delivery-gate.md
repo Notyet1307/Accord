@@ -1,58 +1,46 @@
 # Delivery Gate
 
-Planning artifacts and execution authority remain separate.
+## Current path: OMP
 
-## Candidate state
+Use one goal, one versioned repository Spec, one GitHub task entry, and one PR evidence record per authorized change. The Accepted Release, applicable ADRs, and product/runtime/security invariants in `AGENTS.md` remain binding.
 
-- A Delivery Spec Parent and every implementation child are created with `needs-triage`.
-- Candidate creation, review, and Controller handoff do not add a ready label or start execution.
-- The accepted Parent title and body remain immutable after current Spec publication binds its exact `pi-ticket-planning:spec-acceptance:v1` receipt.
-- `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` use the mappings in `docs/agents/triage-labels.md`.
+1. **Establish scope.** Use the user's explicit request to identify the authorized goal, changes, and external operations. Spec preparation, implementation, push/PR/merge, and production or business actions are distinct scopes; authorization covers only what the user actually requested. Record a reference to the actual request, not a manufactured acceptance receipt.
+2. **Pin the contract.** Put behavior, boundaries, acceptance criteria, and evidence requirements in one repository Spec. Identify its path and Git revision. Resolve conflicts with the Accepted Release or ADR before implementation; approval of preparation alone does not authorize executing the Spec.
+3. **Use one task entry.** The GitHub Issue links to the Spec and relevant PR, and owns current remote task status. Follow `issue-tracker.md` when preserving historical bodies. Do not create a parallel graph, child-ticket set, planning ledger, or local status mirror.
+4. **Execute the authorized change in OMP.** Reuse current code and contracts, collect actual tool/command/review results, and stay inside the authorized boundary. Missing authority or changed scope requires a new explicit user decision.
+5. **Bind evidence and deliver.** Use the PR record below. Merge only within explicit authorization, with required checks passing for the current head and acceptance criteria satisfied for the authorized change. Re-read GitHub for actual check and merge outcomes.
 
-## Current executable Release
+## One SHA-bound PR evidence record
 
-- Bind one separate `pi-ticket-planning:delivery-release-graph:v3` artifact in the authoritative Planning Case; never append it to the immutable Parent body.
-- The graph represents exactly one bounded all-AGENT Release. Future Releases and HUMAN work remain in a separate non-executable Roadmap.
-- Every Parent Scenario has DIRECT coverage; every ENABLER names a current consumer and objective exit condition; every consumed state or artifact has an earlier producer or declared external input.
-- The walking skeleton closes the smallest trigger-to-result loop, and native child order places every blocker before its dependent.
-- Ordinal 2 and later bind the accepted predecessor `release-result:v1`, exact prior Plan digest, and fresh execution-base ancestry.
+The PR body is the current evidence index. Link actual logs, check runs, and review records rather than synthesizing execution-system results. Include:
 
-## Readiness review
+- goal/Issue, actual scoped authorization reference, and what this PR does and deliberately leaves unimplemented;
+- execution base SHA, current PR head SHA, Spec path, and exact Spec commit/blob or digest;
+- acceptance-criterion results, exact commands and outcomes, environment/toolchain, and links to actual evidence and review findings/disposition;
+- GitHub check names/run URLs and their tested SHA; distinguish a PR merge-test commit from its head;
+- remaining limitations, unavailable checks, qualification status, and the observed GitHub merge result when delivered.
 
-Before Controller handoff, require the current `ticket-readiness` contract:
+Code, Spec, policy, or relevant base drift invalidates affected checks/review. Refresh the evidence for the new head and Spec revision before claiming completion; retain earlier records as historical evidence. Do not promote a result from an older SHA, a fixture, or a successful tool invocation into current acceptance.
 
-- one primary outcome and one primary behavioral verification seam per child;
-- three to eight single-assertion acceptance criteria and no more than three independent delivery surfaces;
-- canonical risk classes, bounded scope/write families, protected paths, REPLAN triggers, and integration-only declaration;
-- for high-risk work only, an exact independently owned Oracle binding and closed trusted verifier manifest; normal/low work omits the Oracle section;
-- one passing exact-base Ticket Context check per child;
-- passing graph contract, Scenario coverage, walking-skeleton, strict-frontier, closure, and freshness checks;
-- one fresh, binding-bound independent whole-Release review;
-- explicit human acceptance of the exact reviewed graph and exact handoff fingerprint at their owning gates.
+## CI and stronger qualification
 
-Any source, accepted Parent, child body, graph, decision, Oracle, order, blocker, policy, or base drift requires fresh deterministic checks and review. Missing or conflicting authority fails closed.
+Keep `.github/workflows/herdr-delivery-gate.yml`, workflow name `Herdr delivery gate`, and check name `herdr-delivery-gate` unchanged. GitHub Actions runs `./scripts/validate-ci.sh`; this is **non-qualification CI**, not proof of the trusted operator boundary, real MagicChat behavior, or the complete R003 Release.
 
-## Recommended Controller handoff
+`./scripts/validate-delivery.sh` retains the stronger fail-closed, local-only qualification path. Before interpreting repository shell, the operator-owned launcher must establish the no-network, secret-minimized filesystem boundary, private temporary directory, and read-only offline cache. Qualification requires an actual exact-commit operator execution record with verified launcher/profile hashes and `BOUNDARY` attestation. Setting a marker, ordinary CI, or an OMP narrative cannot create that evidence.
 
-A reviewed bounded all-AGENT `delivery-release-graph:v3` proceeds through `/prepare-codex-release`:
+Preserve historical Controller qualification receipts as evidence of the executions they actually record; no new Controller result is required or may be fabricated for the OMP path. If the trusted launcher or manual/external conformance surface is unavailable, report qualification/conformance as unavailable or unproven. Synthetic simulator evidence remains labeled synthetic. A prerequisite merge does not waive any later qualification, Human Approval, or production gate.
 
-1. Planner freshly re-reads the accepted Parent, receipt, graph, decisions, children, native edges, policy, and execution base.
-2. Planner compiles one semantic `release-plan.json` for the current Release and displays its exact fingerprint.
-3. The operator approves that exact fingerprint once.
-4. Planner materializes the private Controller input and transitions the Planning Case to `HANDOFF_READY` after exact readback.
-5. Planner reports the Controller start command; the operator starts it separately.
+## Historical routing is noncurrent
 
-All Issues remain `needs-triage`. Planner does not start or poll the Controller, create implementation commits or PRs, merge, or infer execution success. A verified public `release-result:v1` is the only predecessor evidence accepted for a later Release.
+Planner/Controller and Legacy Herdr routing are not prerequisites for the current path. Their accepted bodies, receipts, graphs, admission records, and execution results remain immutable historical provenance, not present authority or a queue to activate. A separate explicit user selection is required to use either path and its own applicable gates; labels alone never select or authorize it.
 
-## Explicit Legacy Herdr exception
-
-Only an operator's explicit Legacy Herdr selection may invoke `/admit-ticket` and apply `ready-for-agent` or `ready-for-human`. That path requires its own capability qualification, readiness evidence, exact mutation Plan, and human confirmation. Parent-last label activation applies only to that Legacy path and is not a prerequisite for planning publication or the recommended Controller handoff.
+Changing these documents does not establish that any existing Herdr process has stopped. Do not start, poll, stop, admit, or activate an old queue as an implied part of this cutover. Preserve old routing records without inferring their live state.
 
 ## Authority boundary
 
-- GitHub owns Issue, label, relationship, PR, commit, check, and merge facts.
-- The Planning Case owns Spec acceptance, graph, decision, review, approval, and handoff records.
-- The configured Controller or explicitly selected Harness owns execution facts.
-- The Accepted Release, applicable ADRs, effective root policy, current code/tests, tracker, and execution system retain their concern-specific authority; no fact is inferred from chat, examples, fixtures, or another system's projection.
+- GitHub alone owns remote Issue, label, relationship, PR, commit, check, and merge facts.
+- The versioned Spec owns the task contract within the Accepted Release and ADR boundary; the Issue and README are pointers, not competing Specs.
+- The actual user request owns development authorization. OMP records only work actually executed and evidence actually observed.
+- External systems retain their product/domain facts. Simplifying repository delivery does not change Approval, Artifact, Runtime Operation, external-outcome, security, or R003 boundaries.
 
-Tracker relationship operations are defined in `docs/agents/issue-tracker.md`. Label strings are defined in `docs/agents/triage-labels.md`.
+Tracker operations are defined in `issue-tracker.md`; label meanings are defined in `triage-labels.md`.
