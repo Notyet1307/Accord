@@ -53,7 +53,7 @@ Agent Runtime 或执行工作空间负责回答：
 ---
 ## 当前开发入口
 
-当前目标使用唯一 GitHub 任务入口 [#62](https://github.com/Notyet1307/Accord/issues/62)，行为契约在版本化 [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md)。Spec 准备、实现、push/PR/merge 和真实外部执行分别受实际用户请求授权；一项授权不自动覆盖其他范围。任务状态以 GitHub 为准，README 不复制 Spec 或维护状态账本。
+当前目标为 C4 Spec 准备，唯一 GitHub 任务入口是 [#44](https://github.com/Notyet1307/Accord/issues/44)，规格草案见 [`docs/specs/r003-c4-recovery-trace-verification.md`](docs/specs/r003-c4-recovery-trace-verification.md)。本轮只准备 Spec 和入口，不启动 C4 实现。C3 已由 [PR #64](https://github.com/Notyet1307/Accord/pull/64) 交付，其 [Spec](docs/specs/r003-c3-approval-publication.md) 和证据保持历史权威。实现、push/PR/merge 和真实外部执行分别受实际用户请求授权；任务状态以 GitHub 为准，README 不维护状态账本。
 
 开发门禁见 [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md)。以下产品模型和外部系统职责不是本仓库默认开发流程的额外门禁。
 
@@ -553,7 +553,7 @@ Lody 不是 R003 的实现依赖，也不是当前编码授权。
 | 当前 Release 承诺什么行为 | [`docs/product/releases/`](docs/product/releases/) |
 | 某项承重技术决策为什么这样选 | [`docs/adr/`](docs/adr/) |
 | AI 如何选择权威来源和避免越界 | [`AGENTS.md`](AGENTS.md) |
-| 当前目标及其唯一行为契约 | [Issue #62](https://github.com/Notyet1307/Accord/issues/62) → [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md) |
+| 当前目标及其规格草案 | [Issue #44](https://github.com/Notyet1307/Accord/issues/44) → [`docs/specs/r003-c4-recovery-trace-verification.md`](docs/specs/r003-c4-recovery-trace-verification.md) |
 | OMP 开发授权、检查和 PR 证据 | [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) |
 | Tracker、Label 和关系如何表达 | [`docs/agents/`](docs/agents/) |
 | Lody 在 Accord 中的准确位置 | [`docs/product/research/lody-runtime-operation-and-coding-workspace.md`](docs/product/research/lody-runtime-operation-and-coding-workspace.md) |
