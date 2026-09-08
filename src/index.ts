@@ -38,6 +38,14 @@ export {
   WRITER_ARTIFACT_HANDOFF_VERSION,
   type AcceptedEvidenceRef,
 } from "./writer-artifact.js";
+export {
+  CaseTraceError,
+  R003_CASE_TRACE_MAX_BYTES,
+  R003_CASE_TRACE_REDACTION_VERSION,
+  R003_CASE_TRACE_VERSION,
+  generateR003CaseTrace,
+  type GeneratedR003CaseTrace,
+} from "./case-trace.js";
 export type { MagicChatApprovalSnapshot } from "./approval-publication.js";
 export { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "./contracts/intake.js";
 export {

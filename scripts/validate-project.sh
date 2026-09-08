@@ -252,6 +252,7 @@ run_node_restricted --test-isolation=none --test dist/test/researcher-analyst.in
 run_node_restricted --test-isolation=none --test dist/test/writer-artifact.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/approval-publication.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/approval-publication-recovery.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/case-trace.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
