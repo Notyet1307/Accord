@@ -11,7 +11,6 @@ import {
   RUNTIME_VERSION,
 } from "../researcher-analyst.js";
 import {
-  CONTRACT_VERSIONS,
   RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION,
   RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_FILE,
   RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_ID,
@@ -48,13 +47,40 @@ import {
 import { reconstructWinnerBoardEntries } from "../researcher-analyst.js";
 
 export const RESEARCHER_ANALYST_HANDOFF_VERSION = "accord.r003-researcher-analyst-handoff/v1" as const;
+/** Exact schema-8 contract-version snapshot; later registry additions stay out of this frozen handoff. */
+export const RESEARCHER_ANALYST_HANDOFF_CONTRACT_VERSIONS = Object.freeze({
+  approval: "accord.approval/v1",
+  auditEvent: "accord.audit-event/v1",
+  board: "accord.board/v1",
+  boardEntry: "accord.board-entry/v1",
+  case: "accord.case/v1",
+  inboxDelivery: "accord.inbox-delivery/v1",
+  inboxReceipt: "accord.inbox-receipt/v1",
+  pendingSideEffect: "accord.pending-side-effect/v1",
+  responseClaim: "accord.response-claim/v1",
+  runtimeInvocation: "accord.runtime-invocation/v1",
+  workflowRun: "accord.workflow-run/v1",
+  magicChatInboxState: "accord.magicchat-inbox-state/v1",
+  magicChatMessage: "accord.magicchat-message/v1",
+  magicChatRpcAction: "accord.magicchat-rpc-action/v1",
+  waitChallenge: "accord.wait-challenge/v1",
+  profileContext: "accord.profile-context/v1",
+  runtimeAttempt: "accord.runtime-attempt/v1",
+  runtimeResult: "accord.runtime-result/v1",
+  runtimeResultArrival: "accord.runtime-result-arrival/v1",
+  runtimePhysicalResponse: "accord.runtime-physical-response/v1",
+  runtimeProviderDelivery: "accord.runtime-provider-delivery/v2",
+  runtimeOpaqueCompletionReceipt: "accord.runtime-opaque-completion-receipt/v1",
+  approvedSyntheticSource: "accord.approved-synthetic-source/v1",
+} as const);
+
 
 /** No-network contract passed to Issue #13; it does not attest a live Pilot. */
 export const R003_RESEARCHER_ANALYST_HANDOFF = Object.freeze({
   handoffVersion: RESEARCHER_ANALYST_HANDOFF_VERSION,
   prerequisite: Object.freeze({ handoffVersion: "accord.r003-magicchat-handoff/v1", sha256: "edb6849094a9bbfc7973fe3e4fee0375ef31c42cf048c08f4781acebee528e40" }),
   databaseSchemaVersion: RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION,
-  contractVersions: CONTRACT_VERSIONS,
+  contractVersions: RESEARCHER_ANALYST_HANDOFF_CONTRACT_VERSIONS,
   migration: Object.freeze({
     file: RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_FILE,
     id: RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_ID,
@@ -120,7 +146,7 @@ export interface PersistedPipeline {
 /** Generated read-only projection with every persisted identity kept branded. */
 export interface GeneratedR003ResearcherAnalystHandoff {
   readonly boardGraph: Readonly<{ board: PersistedBoard; entries: readonly PersistedBoardEntry[]; workflow: PersistedWorkflow; }>;
-  readonly contractVersions: typeof CONTRACT_VERSIONS;
+  readonly contractVersions: typeof RESEARCHER_ANALYST_HANDOFF_CONTRACT_VERSIONS;
   readonly pipelines: Readonly<{ analyst: PersistedPipeline; researcher: PersistedPipeline; }>;
   readonly providerPort: Readonly<{ networkEnabled: false; noSdkRetry: true; version: string; }>;
   readonly profiles: Readonly<{ analyst: Readonly<{ outputSchema: string; version: string; }>; researcher: Readonly<{ outputSchema: string; version: string; }>; runtimeVersion: string; }>;
