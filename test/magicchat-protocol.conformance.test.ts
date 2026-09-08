@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
+import {
+  MAGICCHAT_MAX_SEQUENCE,
+  normalizeMagicChatEnvelope,
+  normalizeMagicChatMessageBodyForSend,
+  parseMagicChatMessageSendPayload,
+  parseMagicChatMessagesListPayload,
+} from "../src/contracts/magicchat.js";
 import { MagicChatProtocolAdapter } from "../src/magicchat/adapter.js";
 import { DeterministicMagicChatSimulator } from "../src/magicchat/simulator.js";
 import { openAuthorityDatabase } from "../src/persistence/sqlite-authority.js";
@@ -689,4 +696,134 @@ test("a mismatched actor after expiry is audited but cannot clear the actor-boun
   } finally {
     temporary.cleanup();
   }
+});
+
+test("C3 choice normalization retains real response identity and rejects malformed or backwards source facts", () => {
+  const simulator = new DeterministicMagicChatSimulator({ appId: "synthetic-app" });
+  const request = {
+    v: 1, id: "choice-request", kind: "request", method: "message.send",
+    payload: {
+      target: { type: "conversation", conversation_id: "conversation-1" },
+      message: {
+        type: "choice", content_type: "text", content: "Approve publication?", selection: "single",
+        options: [{ id: "approve", label: "Approve" }, { id: "reject", label: "Reject" }],
+      },
+    },
+  } as const;
+  const confirmed = simulator.respond(request, "2026-09-08T00:00:00.000Z");
+  const { sender: _sender, ...choiceMessage } = confirmed.payload.message;
+  const choice = {
+    v: 1, id: "choice-delivery", kind: "event", cursor: 1, event: "choice.response_created",
+    payload: {
+      choice_message: choiceMessage,
+      conversation: confirmed.payload.conversation,
+      response: { created_at: "2026-09-08T00:00:01Z", id: "choice-response", option_ids: ["approve"] },
+      sender: { id: "actor-1", name: "Synthetic User", nickname: "", type: "user" },
+    },
+  };
+  const normalized = normalizeMagicChatEnvelope(choice);
+  assert.equal(normalized.kind, "CHOICE_RESPONSE_CREATED");
+  if (normalized.kind !== "CHOICE_RESPONSE_CREATED") throw new Error("expected truthful choice response");
+  assert.equal(normalized.messageId, confirmed.payload.message.id);
+  assert.equal(normalized.messageSequence, confirmed.payload.message.seq);
+  assert.equal(normalized.responseId, "choice-response");
+  assert.deepEqual(normalized.optionIds, ["approve"]);
+  assert.equal(normalized.responseCreatedAt, "2026-09-08T00:00:01.000Z");
+  assert.deepEqual(parseMagicChatMessageSendPayload(confirmed.payload), confirmed.payload);
+  assert.throws(() => simulator.observeUserMessage(choice), /message.created/u);
+  assert.equal(simulator.visibleMessageCount, 1);
+  for (const invalid of [
+    { ...choice, payload: { ...choice.payload, invented_message: {} } },
+    { ...choice, cursor: MAGICCHAT_MAX_SEQUENCE + 1 },
+    { ...choice, payload: { ...choice.payload, sender: { ...choice.payload.sender, type: "app" } } },
+    ...[[], ["approve", "reject"], ["unknown"]].map((option_ids) => ({
+      ...choice, payload: { ...choice.payload, response: { ...choice.payload.response, option_ids } },
+    })),
+    {
+      ...choice, payload: {
+        ...choice.payload,
+        choice_message: { ...choiceMessage, created_at: "2026-09-08T00:00:00.000000002Z" },
+        response: { ...choice.payload.response, created_at: "2026-09-08T00:00:00.000000001Z" },
+      },
+    },
+    {
+      ...choice, payload: {
+        ...choice.payload, choice_message: {
+          ...choiceMessage, body: { ...request.payload.message, options: [{ id: "approve", label: "Approve" }, { id: "approve", label: "Duplicate" }] },
+        },
+      },
+    },
+  ]) assert.throws(() => normalizeMagicChatEnvelope(invalid), TypeError);
+  for (const [content, expected] of [
+    ["\u0085  - Exact Artifact\n", "- Exact Artifact"],
+    ["\uFEFF", "\uFEFF"],
+    ["\u{10400}".repeat(5_000), "\u{10400}".repeat(5_000)],
+  ]) {
+    assert.deepEqual(normalizeMagicChatMessageBodyForSend({ type: "markdown", content }), { type: "markdown", content: expected });
+  }
+  assert.throws(() => normalizeMagicChatMessageBodyForSend({ type: "markdown", content: "\u{10400}".repeat(5_001) }), /5000/u);
+});
+
+test("the pinned RPC cache expires for reads while durable send uniqueness retains the original stored body", () => {
+  const simulator = new DeterministicMagicChatSimulator({ appId: "synthetic-app" });
+  const list = {
+    v: 1, id: "history-request", kind: "request", method: "conversation.messages.list",
+    payload: { conversation_id: "conversation-1", before_or_equal_seq: MAGICCHAT_MAX_SEQUENCE, limit: 100 },
+  } as const;
+  const before = simulator.respond(list, "2026-09-08T00:00:00.000Z");
+  assert.deepEqual(before.payload.messages, []);
+  simulator.observeUserMessage(MAGICCHAT_MESSAGE_CREATED_ENVELOPE);
+  assert.deepEqual(simulator.respond(list, "2026-09-08T00:00:01.000Z"), before);
+  assert.equal(simulator.respond({ ...list, id: "fresh-history" }, "2026-09-08T00:00:01.000Z").payload.messages.length, 1);
+  assert.equal(simulator.respond(list, "2026-09-08T00:10:00.000Z").payload.messages.length, 1);
+  const send = {
+    v: 1, id: "publication-request", kind: "request", method: "message.send",
+    payload: {
+      target: { type: "conversation", conversation_id: "conversation-1" },
+      message: { type: "markdown", content: "- Exact Artifact\n" },
+    },
+  } as const;
+  const first = simulator.respond(send, "2026-09-08T00:10:01.000Z");
+  assert.equal(first.payload.created, true);
+  assert.equal(send.payload.message.content, "- Exact Artifact\n");
+  assert.equal(first.payload.message.body.content, "- Exact Artifact");
+  assert.equal(first.payload.message.summary, "Synthetic Markdown artifact");
+  assert.deepEqual(simulator.respond(send, "2026-09-08T00:10:02.000Z"), first);
+  const changed = { ...send, payload: { ...send.payload, message: { type: "markdown", content: "Different bytes" } } } as const;
+  assert.throws(() => simulator.respond(changed, "2026-09-08T00:10:02.000Z"), /request_id_conflict/u);
+  const reconciled = simulator.respond(changed, "2026-09-08T00:20:01.000Z");
+  assert.equal(reconciled.payload.created, false);
+  assert.deepEqual(reconciled.payload.message, first.payload.message);
+  assert.equal(simulator.visibleMessageCount, 2);
+});
+
+test("history selects the latest bounded page and returns ascending unique message sequences", () => {
+  const simulator = new DeterministicMagicChatSimulator({ appId: "synthetic-app" });
+  for (let sequence = 1; sequence <= 105; sequence += 1) {
+    simulator.observeUserMessage(magicChatMessageCreatedEnvelope({
+      cursor: sequence, messageSequence: sequence, messageId: `visible-${sequence}`, envelopeEventId: `delivery-${sequence}`,
+    }));
+  }
+  const list = {
+    v: 1, id: "latest-history", kind: "request", method: "conversation.messages.list",
+    payload: { conversation_id: "conversation-1", before_or_equal_seq: MAGICCHAT_MAX_SEQUENCE, limit: 100 },
+  } as const;
+  const payload = simulator.respond(list, "2026-09-08T00:00:00.000Z").payload;
+  assert.deepEqual(parseMagicChatMessagesListPayload(payload), payload);
+  assert.equal(payload.messages.length, 100);
+  assert.equal(payload.messages[0]!.seq, 6);
+  assert.equal(payload.messages.at(-1)!.seq, 105);
+  const bounded = simulator.respond({
+    ...list, id: "bounded-history", payload: { ...list.payload, before_or_equal_seq: 50, limit: 3 },
+  }, "2026-09-08T00:00:00.000Z");
+  assert.deepEqual(bounded.payload.messages.map((message) => message.seq), [48, 49, 50]);
+  for (const invalid of [
+    { ...payload, messages: [...payload.messages].reverse() },
+    { ...payload, messages: [payload.messages[0], payload.messages[0]] },
+    { ...payload, limit: 1 },
+    { ...payload, conversation_id: "invented-response-field" },
+  ]) assert.throws(() => parseMagicChatMessagesListPayload(invalid), TypeError);
+  assert.throws(() => simulator.respond({
+    ...list, id: "invalid-bound", payload: { ...list.payload, before_or_equal_seq: 0 },
+  }, "2026-09-08T00:00:00.000Z"), /positive safe integer/u);
 });

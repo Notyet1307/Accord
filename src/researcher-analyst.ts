@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromise } from "node:util/types";
 
+import { ensureApprovalRequest } from "./approval-publication.js";
 import { CONTRACT_VERSIONS, FIXED_WORKFLOW_DEFINITION, FIXED_WORKFLOW_DEFINITION_ID } from "./contracts/versions.js";
 import {
   deriveProfileContextId,
@@ -48,6 +49,7 @@ import {
   deriveDurableGenericMaterialization,
   materializeInvocationOutput,
   parseDurableGenericMaterialization,
+  WRITER_MATERIALIZATION_SCHEMA_VERSION,
   type DurableGenericMaterialization,
   type GenericBoardEntryCandidate,
   type GenericMaterializationCandidate,
@@ -562,7 +564,7 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
       const terminal = currentWorkflowState === "FAILED"
         ? { caseStatus: "FAILED", minimumAdvance: 1 }
         : currentWorkflowState === "PUBLICATION_HOLD"
-          ? { caseStatus: "OPEN", minimumAdvance: workflowOrder.indexOf("PUBLISH") - committedIndex + 1 }
+          ? { caseStatus: "OPEN", minimumAdvance: workflowOrder.indexOf("WAIT_FOR_APPROVAL") - committedIndex + 1 }
           : currentWorkflowState === "REJECTED"
             ? { caseStatus: "REJECTED", minimumAdvance: workflowOrder.indexOf("WAIT_FOR_APPROVAL") - committedIndex + 1 }
             : undefined;
@@ -1506,6 +1508,7 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
     const nextState = prepared.profile === "RESEARCHER" ? "ANALYST" : prepared.profile === "ANALYST" ? "REVIEWER" : prepared.profile === "REVIEWER" ? "WRITER" : "WAIT_FOR_APPROVAL";
     if (database.prepare("UPDATE boards SET revision = ? WHERE board_id = ? AND revision = ?").run(nextRevision, prepared.boardId, prepared.boardRevision).changes !== 1 || database.prepare("UPDATE workflow_runs SET state = ?, revision = revision + 1 WHERE workflow_run_id = ? AND state = ? AND revision = ?").run(nextState, prepared.workflowRunId, prepared.profile, prepared.workflowRevision).changes !== 1) throw new Error("winner lost its freshness compare-and-set");
     database.prepare("UPDATE runtime_attempts SET state = 'WINNER', finished_at = ? WHERE attempt_id = ? AND state = 'RESULT_RECEIVED'").run(trustedReceivedAt, attemptId); database.prepare("UPDATE runtime_invocations SET status = 'RESULT_COMMITTED' WHERE invocation_id = ? AND status = 'RUNNING'").run(prepared.invocationId);
+    if (prepared.profile === "WRITER" && winnerMaterialization?.schemaVersion === WRITER_MATERIALIZATION_SCHEMA_VERSION) ensureApprovalRequest(database, prepared.caseId, trustedReceivedAt, "WRITER_WINNER");
     return { arrivalId, attemptId, boardRevision: nextRevision, invocationId: prepared.invocationId, outcome: "WINNER", proposalBoardRevision: prepared.profile === "ANALYST" ? nextRevision : undefined, responseId, resultId, ...(winnerMaterialization === undefined ? {} : { materialization: winnerMaterialization }) };
   });
 }

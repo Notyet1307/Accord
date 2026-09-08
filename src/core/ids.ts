@@ -118,6 +118,11 @@ export function deriveArtifactId(input: { readonly caseId: CaseId; readonly work
   return derive<"ArtifactId">(PREFIXES.artifact, "artifact", [input.caseId, input.workflowRunId]);
 }
 
+/** C3 identities share the existing business preimage; delivery envelopes never enter these bindings. */
+export function deriveApprovalPublicationId(kind: "challenge" | "approval" | "response_claim" | "action" | "request" | "freshness" | "corr" | "audit", namespace: string, parts: readonly string[]): string {
+  return derive(kind, `approval-publication/${namespace}`, parts);
+}
+
 function derive<Kind extends string>(prefix: string, namespace: string, parts: readonly string[]): BusinessId<Kind> {
   return deriveIdentity<Kind>(prefix, namespace, parts, "business");
 }

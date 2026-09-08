@@ -53,7 +53,7 @@ Agent Runtime 或执行工作空间负责回答：
 ---
 ## 当前开发入口
 
-当前目标使用唯一 GitHub 任务入口 [#62](https://github.com/Notyet1307/Accord/issues/62)，行为契约在版本化 [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md)。当前授权只覆盖前置修复、Spec 准备及其交付，**不启动 C3 实现**；执行 C3 需要后续明确请求。任务状态以 GitHub 为准，README 不复制 Spec 或维护状态账本。
+当前目标使用唯一 GitHub 任务入口 [#62](https://github.com/Notyet1307/Accord/issues/62)，行为契约在版本化 [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md)。Spec 准备、实现、push/PR/merge 和真实外部执行分别受实际用户请求授权；一项授权不自动覆盖其他范围。任务状态以 GitHub 为准，README 不复制 Spec 或维护状态账本。
 
 开发门禁见 [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md)。以下产品模型和外部系统职责不是本仓库默认开发流程的额外门禁。
 
@@ -445,7 +445,9 @@ R002/r2 的验证结果与 ADR-0001 作为 R002 范围内的历史证据保留�
 
 状态：`COMMITTED`
 
-当前实现包含 TypeScript/SQLite authority core、MagicChat ingress/wait-resume、`RESEARCHER` → `ANALYST` Runtime recovery、四个固定 Profile 的 bounded Invocation/Attempt arbitration、最小权限 Reviewer/Writer Context、双 Reviewer disposition 与 H1，以及 schema 10 中由完整 sealed-manifest 校验后晋升的 `ACCEPTED` EvidenceRef 和 `WRITER` 唯一持久化 Artifact/ArtifactRef/H2 原子提交；成功后 Workflow 仅推进到 `WAIT_FOR_APPROVAL`。这些仅是代码、契约、迁移和确定性测试证据；仍无 Human Approval、publication、真实外部执行或完整 R003 结果，故不能声称 R003 已完成。
+当前实现包含 TypeScript/SQLite authority core、MagicChat ingress/wait-resume、`RESEARCHER` → `ANALYST` Runtime recovery、四个固定 Profile 的 bounded Invocation/Attempt arbitration、最小权限 Reviewer/Writer Context、双 Reviewer disposition 与 H1，以及完整 sealed-manifest 校验后的 `ACCEPTED` EvidenceRef 和 `WRITER` 唯一 Artifact/ArtifactRef/H2。schema 11 将 Writer winner 与审批请求原子提交，通过真实形状的 `choice.response_created` 绑定人工决定与 Artifact revision/digest，并在 Claim、Freshness 和发送前本地门禁通过后确定性发布；未知结果只以原 request ID 恢复，外部确认后才完成 Workflow。
+
+审批、拒绝、串行 receipt/ACK、旧库迁移、篡改拒绝和未知发送恢复已有本地合成验证。被阻塞的 reliable event 保留为 `RECEIVED`，须在较低 cursor 的 ACK 确认后重放源事件继续；当前 adapter 不自动排空接收队列。发布请求保留 Artifact Markdown 原始字节；确认校验遵循 pinned MagicChat 的正文规范化，模拟器不证明真实 Markdown 渲染。上述代码与非 qualification CI 不构成真实人工审批、MagicChat 联调、C4/C5 验收或生产资格，也不表示 R003 已完成。
 
 R003 的精确边界是：
 
