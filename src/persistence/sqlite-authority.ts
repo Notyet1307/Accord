@@ -16,6 +16,7 @@ import {
   validateApprovalPublication,
   type MagicChatApprovalSnapshot,
 } from "../approval-publication.js";
+import { generateR003CaseTrace, type GeneratedR003CaseTrace } from "../case-trace.js";
 import { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "../contracts/intake.js";
 import {
   normalizeMagicChatEnvelope,
@@ -3745,6 +3746,12 @@ export class AuthorityDatabase {
   public inspectApprovalPublication(caseId: unknown): MagicChatApprovalSnapshot | undefined {
     this.#assertOpen();
     return inspectApprovalPublication(this.#database, parseCaseId(caseId));
+  }
+
+  /** Reads one deterministic Case-scoped Trace after startup validation/recovery. */
+  public generateCaseTrace(caseId: unknown, maxBytes?: number): GeneratedR003CaseTrace {
+    this.#assertOpen();
+    return generateR003CaseTrace(this.#database, caseId, maxBytes);
   }
 
   public inspectPendingMagicChatRequests(appId: unknown): readonly MagicChatPendingRequest[] {

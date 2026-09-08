@@ -27,6 +27,7 @@ const requiredValidationEntrypoints = [
   "scripts/validate-project.sh",
   "src/handoff.ts",
   "test/contracts.test.ts",
+  "test/helpers/c4-runner-child.ts",
   "test/helpers/intake-crash-child.ts",
   "test/magicchat-protocol.conformance.test.ts",
   "test/researcher-analyst.integration.test.ts",
@@ -36,6 +37,7 @@ const requiredValidationEntrypoints = [
   "test/writer-artifact.integration.test.ts",
   "test/approval-publication.integration.test.ts",
   "test/approval-publication-recovery.integration.test.ts",
+  "test/case-trace.integration.test.ts",
   ...c1TestEntrypoints,
 ];
 const requiredEntrypointSet = new Set(requiredValidationEntrypoints);
@@ -81,6 +83,7 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted --test-isolation=none --test dist/test/writer-artifact.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/approval-publication.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/approval-publication-recovery.integration.test.js",
+      "run_node_restricted --test-isolation=none --test dist/test/case-trace.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js",
       "run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js",
@@ -88,7 +91,7 @@ const requiredInvocationMarkers = new Map([
       "ACTUAL_HANDOFF=$(run_node_restricted dist/src/handoff.js)",
     ],
   ],
-  ["test/synthetic-intake.conformance.test.ts", ['new URL("helpers/intake-crash-child.js", import.meta.url)']],
+  ["test/synthetic-intake.conformance.test.ts", ['new URL("helpers/intake-crash-child.js", import.meta.url)', 'new URL("helpers/c4-runner-child.js", import.meta.url)']],
 ]);
 const forbiddenCiInvocationMarkers = new Map([
   ["scripts/validate-ci.sh", ["operator-seatbelt-v1", "scripts/validate-delivery.sh", "scripts/validate-project.sh"]],
