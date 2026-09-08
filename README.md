@@ -51,6 +51,14 @@ Agent Runtime 或执行工作空间负责回答：
 两者不能混为一个事实源。
 
 ---
+## 当前开发入口
+
+当前目标使用唯一 GitHub 任务入口 [#62](https://github.com/Notyet1307/Accord/issues/62)，行为契约在版本化 [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md)。当前授权只覆盖前置修复、Spec 准备及其交付，**不启动 C3 实现**；执行 C3 需要后续明确请求。任务状态以 GitHub 为准，README 不复制 Spec 或维护状态账本。
+
+开发门禁见 [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md)。以下产品模型和外部系统职责不是本仓库默认开发流程的额外门禁。
+
+---
+
 
 ## R003 executable authority and MagicChat ingress
 
@@ -80,15 +88,17 @@ establish its no-network, secret-minimized filesystem boundary before this
 repository shell is interpreted. The launcher supplies the boundary marker,
 private `TMPDIR`, and read-only offline npm cache; direct invocation fails
 closed. Launcher/profile hash verification and the `BOUNDARY` attestation are
-Controller receipt evidence, not authority implemented by repository code.
-The checked-in GitHub Actions workflow does not provide that trusted pre-shell
-boundary and is explicitly outside this local-only qualification.
+actual operator execution evidence, not authority implemented by repository code.
+Historical Controller receipts remain evidence of their original runs; OMP must
+not manufacture replacements. The checked-in GitHub Actions workflow does not
+provide that trusted pre-shell boundary and is outside this local-only qualification.
 
 GitHub Actions instead calls `./scripts/validate-ci.sh`, a non-qualification
 entrypoint that refuses the operator boundary marker. After the workflow installs
-the pinned lockfile, this entrypoint runs the static seam inventory, typecheck,
-build, contract, SQLite integration, runtime-capability, and conformance suites.
-Its result is CI evidence only and cannot replace the trusted local qualification.
+the pinned lockfile, this entrypoint runs the repository CI checks, including the
+frozen handoff gates. The workflow remains `Herdr delivery gate` and its check
+remains `herdr-delivery-gate`; the names do not select Herdr execution. Its result
+is CI evidence only and cannot replace the trusted local qualification.
 
 The trusted local gate installs only the exact lockfile artifacts from the
 configured offline cache, then typechecks, builds, and runs deterministic contract
@@ -96,8 +106,10 @@ and SQLite tests inside a secret-minimized, filesystem-restricted pinned-Node
 capability boundary. Network modules and globals remain unavailable at runtime,
 and executable bypass regressions cover computed imports, bracketed environment
 access, and denied-file reads. The gate defines the qualification mechanism; an
-actual pass requires an exact-commit Controller receipt with matching launcher and
-profile hashes plus `BOUNDARY` attestation.
+actual pass requires an exact-commit operator execution record with verified
+launcher/profile hashes plus `BOUNDARY` attestation. When that trusted launcher
+or manual/external conformance surface is unavailable, report it as unavailable
+or unproven; a green CI run or synthetic simulator cannot stand in for it.
 
 The protocol suite uses only an in-memory deterministic simulator. It proves local
 adapter shape, migration, transaction, replay, clarification, ACK ordering,
@@ -488,7 +500,7 @@ Lody 不是 R003 的实现依赖，也不是当前编码授权。
 6. 外部事实 Owner；
 7. 可执行 Acceptance Tests；
 8. 必要的 ADR；
-9. Delivery Spec 和 Admission。
+9. 版本化 Spec 和明确限定范围的用户执行授权。
 
 ---
 
@@ -539,7 +551,8 @@ Lody 不是 R003 的实现依赖，也不是当前编码授权。
 | 当前 Release 承诺什么行为 | [`docs/product/releases/`](docs/product/releases/) |
 | 某项承重技术决策为什么这样选 | [`docs/adr/`](docs/adr/) |
 | AI 如何选择权威来源和避免越界 | [`AGENTS.md`](AGENTS.md) |
-| Delivery Ticket 如何进入执行 | [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) |
+| 当前目标及其唯一行为契约 | [Issue #62](https://github.com/Notyet1307/Accord/issues/62) → [`docs/specs/r003-c3-approval-publication.md`](docs/specs/r003-c3-approval-publication.md) |
+| OMP 开发授权、检查和 PR 证据 | [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) |
 | Tracker、Label 和关系如何表达 | [`docs/agents/`](docs/agents/) |
 | Lody 在 Accord 中的准确位置 | [`docs/product/research/lody-runtime-operation-and-coding-workspace.md`](docs/product/research/lody-runtime-operation-and-coding-workspace.md) |
 | 外部项目和技术路线的事实依据 | [`docs/product/research/`](docs/product/research/) |
@@ -551,31 +564,25 @@ Lody 不是 R003 的实现依赖，也不是当前编码授权。
 
 ## 从愿景到实现
 
-Accord 的开发路径是：
+Accepted Release 和适用 ADR 约束产品范围；当前仓库开发路径是：
 
 ```text
-Product Vision
+明确限定范围的用户授权
     ↓
-Release Frame
+一个版本化 Spec
     ↓
-Evidence Protocol / Pilot
+一个 GitHub Issue（指向 Spec）
     ↓
-Accepted ADR（仅在需要承重技术决定时）
+OMP 执行已授权的变更
     ↓
-Delivery Spec + Scenario IDs
+一个 PR（绑定 head SHA、Spec 修订、实际检查和证据）
     ↓
-Candidate Tickets + Handoffs
-    ↓
-Admission Review
-    ↓
-Harness Execution
-    ↓
-Independent Verification
-    ↓
-Evidence-backed Release Decision
+授权范围内的 Merge 与 GitHub 结果回读
 ```
 
-`VISION.md` 中的 Phase、Work Package、Runtime Adapter 和外部参考只提供能力地图。它们必须先被缩小为一个有边界、有证据要求的 Release，才能继续拆成可执行 Ticket。
+完整规则以 [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) 为准。Planner/Controller graph、Admission 和 Legacy Herdr 不再是默认前置条件；其历史正文和回执保留为非当前来源。使用旧路径需要单独明确选择，Label 不自动授权，也不代表旧进程已经停止。
+
+`VISION.md` 的 Phase、Work Package、Runtime Adapter 和外部参考仍只是能力地图，不能扩大当前 Release、Spec 或用户授权的范围。
 
 ---
 
@@ -603,7 +610,7 @@ Evidence-backed Release Decision
 开始任何实现前：
 
 1. 阅读根 [`AGENTS.md`](AGENTS.md)；
-2. 确认当前 Accepted Release、Delivery Spec 或 Ticket；
+2. 确认明确的用户授权范围，以及 Issue 指向的版本化 Spec、Accepted Release；
 3. 只读取会改变当前决策的 ADR、愿景章节和研究材料；
 4. 检查当前代码、配置、类型和测试；
 5. 明确当前任务影响的 Owner、Seam、Scenario 和外部副作用；
