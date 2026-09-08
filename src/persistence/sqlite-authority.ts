@@ -3,6 +3,19 @@ import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  authorizeApprovalDispatch,
+  holdInvalidApprovalDispatch,
+  inspectApprovalPublication,
+  pendingApprovalRequests,
+  processApprovalEvent,
+  processApprovalResponse,
+  projectApprovalProtocol,
+  recordRejectedApprovalEvent,
+  recoverLegacyApprovalRequests,
+  validateApprovalPublication,
+  type MagicChatApprovalSnapshot,
+} from "../approval-publication.js";
 import { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "../contracts/intake.js";
 import {
   normalizeMagicChatEnvelope,
@@ -446,9 +459,28 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
     }
+    if (version === 10) {
+      validatePersistedAuthorityState(database);
+      validatePersistedRuntimeAuthorityGraph(database);
+      validatePersistedAcceptedEvidence(database);
+      validatePersistedWriterArtifacts(database);
+    }
   }
   const pending = migrations.filter((migration) => migration.version > version);
   if (pending.length > 0) {
+    const rebuildsApprovalSchema = pending.some((migration) => migration.version === 11);
+    if (rebuildsApprovalSchema && pragmaValue(database, "PRAGMA foreign_keys", "pre-rebuild foreign_keys") !== 1) {
+      throw new Error("schema-11 rebuild requires foreign-key enforcement before migration");
+    }
+    try {
+      /* SQLite's table-rebuild procedure disables enforcement outside the
+       * transaction; the complete foreign_key_check still gates COMMIT. */
+      if (rebuildsApprovalSchema) {
+        database.exec("PRAGMA foreign_keys = OFF");
+        if (pragmaValue(database, "PRAGMA foreign_keys", "rebuild foreign_keys") !== 0) {
+          throw new Error("SQLite refused to disable foreign-key enforcement for schema-11 rebuild");
+        }
+      }
     /* A populated legacy authority must never be left half-upgraded. */
     database.exec("BEGIN IMMEDIATE");
     try {
@@ -474,6 +506,8 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
       validatePersistedWriterArtifacts(database);
+      if (rebuildsApprovalSchema) recoverLegacyApprovalRequests(database);
+      validateApprovalPublication(database);
       recoverOpaqueCompletionReceipts(database);
       recoverReceivedRuntimeAttempts(database);
       reconcileInterruptedRuntimeAttempts(database);
@@ -481,10 +515,19 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
       validatePersistedWriterArtifacts(database);
+      validateApprovalPublication(database);
       checkDatabaseHealth(database);
       database.exec("COMMIT");
     } catch (error) {
       rollbackAfterFailure(database, error);
+    }
+    } finally {
+      if (rebuildsApprovalSchema) {
+        database.exec("PRAGMA foreign_keys = ON");
+        if (pragmaValue(database, "PRAGMA foreign_keys", "restored foreign_keys") !== 1) {
+          throw new Error("SQLite refused to restore foreign-key enforcement after schema-11 rebuild");
+        }
+      }
     }
   }
   validateAppliedSchema(database, migrations);
@@ -500,6 +543,7 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
       validatePersistedWriterArtifacts(database);
+      validateApprovalPublication(database);
       recoverOpaqueCompletionReceipts(database);
       recoverReceivedRuntimeAttempts(database);
       reconcileInterruptedRuntimeAttempts(database);
@@ -507,6 +551,7 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
       validatePersistedWriterArtifacts(database);
+      validateApprovalPublication(database);
       database.exec("COMMIT");
     } catch (error) {
       rollbackAfterFailure(database, error);
@@ -766,7 +811,7 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
            SELECT 1
            FROM magicchat_inbox_states AS s
            WHERE s.receipt_id = inbox_receipts.receipt_id
-             AND s.event_role = 'CLARIFICATION_REPLY'
+             AND s.event_role IN ('CLARIFICATION_REPLY', 'APPROVAL_RESPONSE', 'OBSERVED_INPUT')
          )
        ORDER BY app_id, cursor`,
     )
@@ -823,7 +868,8 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
   const allDeliveries = queryAllInboxDeliveries(database);
   for (const [index, value] of allDeliveries.entries()) {
     const delivery = parsePersistedInboxDelivery(parsePersistenceRow(value, `inbox delivery ${index}`));
-    if (queryMagicChatEventRoleByReceipt(database, delivery.receiptId) === "CLARIFICATION_REPLY") {
+    const eventRole = queryMagicChatEventRoleByReceipt(database, delivery.receiptId);
+    if (eventRole === "CLARIFICATION_REPLY" || eventRole === "APPROVAL_RESPONSE" || eventRole === "OBSERVED_INPUT") {
       continue;
     }
     const graph = queryPersistedIntakeByReceiptId(database, delivery.receiptId);
@@ -835,7 +881,7 @@ function validatePersistedAuthorityState(database: DatabaseSync): void {
   }
 
   const magicChatStates = database
-    .prepare("SELECT app_id, cursor FROM magicchat_inbox_states ORDER BY app_id, cursor")
+    .prepare("SELECT app_id, cursor FROM magicchat_inbox_states WHERE event_role IN ('INTAKE', 'CLARIFICATION_REPLY') ORDER BY app_id, cursor")
     .all();
   for (const [index, value] of magicChatStates.entries()) {
     const identity = parsePersistenceRow(value, `MagicChat inbox state ${index}`);
@@ -1618,7 +1664,7 @@ function queryMagicChatProtocol(
 
 function queryMagicChatProtocols(database: DatabaseSync, appId: string): readonly PersistenceRow[] {
   return database
-    .prepare(`${MAGICCHAT_PROTOCOL_SELECT} WHERE s.app_id = ? ORDER BY s.cursor`)
+    .prepare(`${MAGICCHAT_PROTOCOL_SELECT} WHERE s.app_id = ? AND s.event_role IN ('INTAKE', 'CLARIFICATION_REPLY') ORDER BY s.cursor`)
     .all(appId)
     .map((value, index) => parsePersistenceRow(value, `MagicChat protocol state ${index}`));
 }
@@ -1626,7 +1672,7 @@ function queryMagicChatProtocols(database: DatabaseSync, appId: string): readonl
 function queryMagicChatEventRoleByReceipt(
   database: DatabaseSync,
   receiptId: InboxReceiptId,
-): "INTAKE" | "CLARIFICATION_REPLY" | undefined {
+): "INTAKE" | "CLARIFICATION_REPLY" | "APPROVAL_RESPONSE" | "OBSERVED_INPUT" | undefined {
   const value = database
     .prepare("SELECT event_role FROM magicchat_inbox_states WHERE receipt_id = ?")
     .get(receiptId);
@@ -1634,7 +1680,7 @@ function queryMagicChatEventRoleByReceipt(
     return undefined;
   }
   const row = parsePersistenceRow(value, "MagicChat inbox event role");
-  return requireOneOf(row, "event_role", ["INTAKE", "CLARIFICATION_REPLY"] as const);
+  return requireOneOf(row, "event_role", ["INTAKE", "CLARIFICATION_REPLY", "APPROVAL_RESPONSE", "OBSERVED_INPUT"] as const);
 }
 
 function parseOptionalString(row: PersistenceRow, column: string): string | undefined {
@@ -3680,7 +3726,25 @@ export class AuthorityDatabase {
     this.#assertOpen();
     const [validatedAppId, validatedCursor] = validateInspectionKey(appId, cursor);
     const row = queryMagicChatProtocol(this.#database, validatedAppId, validatedCursor);
-    return row === undefined ? undefined : parseMagicChatProtocol(row).snapshot;
+    if (row === undefined) return undefined;
+    const eventRole = requireOneOf(row, "event_role", ["INTAKE", "CLARIFICATION_REPLY", "APPROVAL_RESPONSE", "OBSERVED_INPUT"] as const);
+    if (eventRole === "INTAKE" || eventRole === "CLARIFICATION_REPLY") {
+      const base = parseMagicChatProtocol(row).snapshot;
+      return projectApprovalProtocol(this.#database, base, validatedCursor) ?? base;
+    }
+    const baseRow = this.#database.prepare(`${MAGICCHAT_PROTOCOL_SELECT}
+      WHERE s.app_id = ? AND s.case_id = ? AND s.event_role IN ('INTAKE', 'CLARIFICATION_REPLY')
+      ORDER BY s.cursor DESC LIMIT 1`).get(validatedAppId, requireString(row, "case_id"));
+    if (baseRow === undefined) throw new Error("C3 protocol receipt lacks its original clarification authority");
+    const base = parseMagicChatProtocol(parsePersistenceRow(baseRow, "C3 protocol clarification base")).snapshot;
+    const projected = projectApprovalProtocol(this.#database, base, validatedCursor);
+    if (projected === undefined) throw new Error("C3 protocol receipt lacks its approval projection");
+    return projected;
+  }
+
+  public inspectApprovalPublication(caseId: unknown): MagicChatApprovalSnapshot | undefined {
+    this.#assertOpen();
+    return inspectApprovalPublication(this.#database, parseCaseId(caseId));
   }
 
   public inspectPendingMagicChatRequests(appId: unknown): readonly MagicChatPendingRequest[] {
@@ -3692,7 +3756,40 @@ export class AuthorityDatabase {
         ? []
         : [Object.freeze({ cursor: parsed.snapshot.cursor, request: parsed.nextRequest })];
     });
+    pending.push(...pendingApprovalRequests(this.#database, validatedAppId));
     return Object.freeze(pending);
+  }
+
+  public dispatchMagicChatRequest(
+    appId: unknown,
+    requestEnvelopeId: unknown,
+    now: unknown,
+    send: (request: MagicChatRequestEnvelope) => unknown,
+  ): unknown {
+    this.#assertOpen();
+    const [validatedAppId] = validateInspectionKey(appId, 1);
+    const validatedRequestId = requireStableIdentifier({ requestEnvelopeId }, "requestEnvelopeId");
+    const validatedNow = parseCanonicalInstant(now, "MagicChat dispatch now");
+    if (typeof send !== "function") throw new TypeError("MagicChat dispatch send must be a function");
+    const request = runTransaction(this.#database, () => {
+      try {
+        validatePersistedWriterArtifacts(this.#database);
+      } catch (error) {
+        if (holdInvalidApprovalDispatch(this.#database, validatedAppId, validatedRequestId, validatedNow)) return undefined;
+        throw error;
+      }
+      const approval = authorizeApprovalDispatch(this.#database, validatedAppId, validatedRequestId, validatedNow);
+      if (approval.handled) return approval.request;
+      const action = queryMagicChatAction(this.#database, validatedAppId, validatedRequestId);
+      if (action === undefined) throw new Error("MagicChat dispatch does not match a durable RPC action");
+      const row = queryMagicChatProtocol(this.#database, validatedAppId, requireInteger(action, "cursor"));
+      if (row === undefined) throw new Error("MagicChat dispatch action lacks its durable protocol receipt");
+      const parsed = parseMagicChatProtocol(row);
+      if (requireString(action, "action_state") === "CONFIRMED") return undefined;
+      if (parsed.nextRequest?.id !== validatedRequestId) throw new Error("MagicChat dispatch is not the current durable pending request");
+      return parsed.nextRequest;
+    });
+    return request === undefined ? undefined : send(request);
   }
 
   public persistFixedProfileContext(input: FixedProfileContextInput): PersistedFixedProfileContext {
@@ -3760,12 +3857,14 @@ export class AuthorityDatabase {
     const validatedReceivedAt = parseCanonicalInstant(receivedAt, "MagicChat delivery receivedAt");
     const normalizedEnvelope = normalizeMagicChatEnvelope(envelope);
     if (normalizedEnvelope.kind === "RESPONSE") {
+      const [responseAppId, responseCursor] = runTransaction(this.#database, () => {
+        const approvalCursor = processApprovalResponse(this.#database, validatedAppId, normalizedEnvelope, validatedReceivedAt);
+        if (approvalCursor !== undefined) return [validatedAppId, approvalCursor] as const;
       if (!normalizedEnvelope.ok) {
         throw new Error(
           `MagicChat RPC ${normalizedEnvelope.requestEnvelopeId} failed with ${normalizedEnvelope.error.code}: ${normalizedEnvelope.error.message}`,
         );
       }
-      const [responseAppId, responseCursor] = runTransaction(this.#database, () => {
         const action = queryMagicChatAction(
           this.#database,
           validatedAppId,
@@ -3783,15 +3882,15 @@ export class AuthorityDatabase {
         }
         throw new Error(`unsupported durable MagicChat RPC method ${method}`);
       });
-      const responseState = queryMagicChatProtocol(this.#database, responseAppId, responseCursor);
-      if (responseState === undefined) {
-        throw new Error("confirmed MagicChat RPC has no durable protocol receipt");
-      }
-      const persisted = parseMagicChatProtocol(responseState);
-      return persisted.nextRequest === undefined
-        ? { outcome: "CONFIRMED", snapshot: persisted.snapshot }
-        : { nextRequest: persisted.nextRequest, outcome: "CONFIRMED", snapshot: persisted.snapshot };
+      return this.#magicChatResult(responseAppId, responseCursor, "CONFIRMED");
     }
+    let outcome: "CREATED" | "REPLAYED";
+    try {
+      outcome = runTransaction(this.#database, () => {
+      if (normalizedEnvelope.kind === "CHOICE_RESPONSE_CREATED") validatePersistedWriterArtifacts(this.#database);
+      const approval = processApprovalEvent(this.#database, validatedAppId, normalizedEnvelope, validatedReceivedAt);
+      if (approval !== undefined) return approval.outcome;
+      if (normalizedEnvelope.kind === "CHOICE_RESPONSE_CREATED") throw new Error("MagicChat choice response has no approval challenge");
     const message = normalizedEnvelope;
     if (Date.parse(validatedReceivedAt) < Date.parse(message.messageCreatedAt)) {
       throw new TypeError("MagicChat delivery receivedAt cannot precede message created_at");
@@ -3819,7 +3918,6 @@ export class AuthorityDatabase {
       workflowDefinition: FIXED_WORKFLOW_DEFINITION,
     });
 
-    const outcome = runTransaction(this.#database, () => {
       const existingProtocol = queryMagicChatProtocol(this.#database, input.appId, input.cursor);
       if (existingProtocol !== undefined) {
         assertMagicChatReplayMatches(existingProtocol, input, message);
@@ -3907,15 +4005,27 @@ export class AuthorityDatabase {
       insertClarificationBoundary(this.#database, input, message, intakeIds);
       return "CREATED" as const;
     });
-
-    const persistedRow = queryMagicChatProtocol(this.#database, input.appId, input.cursor);
-    if (persistedRow === undefined) {
-      throw new Error("committed MagicChat intake has no durable protocol state");
+    } catch (error) {
+      if (normalizedEnvelope.kind === "CHOICE_RESPONSE_CREATED") {
+        runTransaction(this.#database, () => recordRejectedApprovalEvent(
+          this.#database,
+          validatedAppId,
+          normalizedEnvelope,
+          validatedReceivedAt,
+          error instanceof Error ? error.message : String(error),
+        ));
+      }
+      throw error;
     }
-    const persisted = parseMagicChatProtocol(persistedRow);
-    return persisted.nextRequest === undefined
-      ? { outcome, snapshot: persisted.snapshot }
-      : { nextRequest: persisted.nextRequest, outcome, snapshot: persisted.snapshot };
+
+    return this.#magicChatResult(validatedAppId, normalizedEnvelope.cursor, outcome);
+  }
+
+  #magicChatResult(appId: string, cursor: number, outcome: MagicChatProtocolResult["outcome"]): MagicChatProtocolResult {
+    const snapshot = this.inspectMagicChatProtocol(appId, cursor);
+    if (snapshot === undefined) throw new Error("committed MagicChat event has no durable protocol state");
+    const nextRequest = this.inspectPendingMagicChatRequests(appId).find((pending) => pending.cursor === cursor)?.request;
+    return nextRequest === undefined ? { outcome, snapshot } : { nextRequest, outcome, snapshot };
   }
 
   #assertOpen(): void {

@@ -33,6 +33,7 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_board_entries_case_revision",
   "index:idx_inbox_deliveries_receipt",
   "index:idx_inbox_receipts_case",
+  "index:idx_inbox_receipts_message",
   "index:idx_magicchat_inbox_app_cursor",
   "index:idx_magicchat_rpc_request",
   "index:idx_pending_side_effects_state",
@@ -49,6 +50,8 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_wait_challenges_active_app",
   "index:idx_wait_challenges_run_version",
   "table:accord_schema_migrations",
+  "table:approval_challenges",
+  "table:approval_legacy_provenance",
   "table:approvals",
   "table:approved_synthetic_source_manifests",
   "table:approved_synthetic_sources",
@@ -64,6 +67,7 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "table:magicchat_rpc_actions",
   "table:pending_side_effects",
   "table:profile_contexts",
+  "table:publication_freshness",
   "table:response_claims",
   "table:runtime_attempts",
   "table:runtime_delivery_arrivals",
@@ -80,6 +84,12 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "table:wait_challenges",
   "table:workflow_definitions",
   "table:workflow_runs",
+  "trigger:approval_challenges_binding_immutable",
+  "trigger:approval_legacy_provenance_immutable_delete",
+  "trigger:approval_legacy_provenance_immutable_update",
+  "trigger:approval_legacy_provenance_sealed_insert",
+  "trigger:approvals_decision_immutable_delete",
+  "trigger:approvals_decision_immutable_update",
   "trigger:approved_synthetic_source_manifest_no_delete",
   "trigger:approved_synthetic_source_manifest_sealed_update",
   "trigger:approved_synthetic_sources_immutable_delete",
@@ -182,7 +192,7 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
       unknown
     >;
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
-    assert.equal(migrationCount["count"], 10);
+    assert.equal(migrationCount["count"], 11);
     raw.close();
 
     const reopened = openAuthorityDatabase(temporary.path);
@@ -239,6 +249,7 @@ test("startup upgrades an exact Issue 10 authority database through the additive
       { version: 8, migration_id: "008_r003_opaque_completion_receipts" },
       { version: 9, migration_id: "009_r003_reviewer_writer_contexts" },
       { version: 10, migration_id: "010_r003_writer_artifact" },
+      { version: 11, migration_id: "011_r003_approval_publication" },
     ]);
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
   } finally {
@@ -556,11 +567,11 @@ test("startup refuses unsupported and drifted schemas", () => {
     const first = openAuthorityDatabase(versioned.path);
     first.close();
     const future = new DatabaseSync(versioned.path);
-    future.exec("PRAGMA user_version = 11");
+    future.exec("PRAGMA user_version = 12");
     future.close();
     assert.throws(
       () => openAuthorityDatabase(versioned.path),
-      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 11/u.test(error.message),
+      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 12/u.test(error.message),
     );
 
     const second = openAuthorityDatabase(drifted.path);

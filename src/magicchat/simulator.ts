@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto";
 
-import { parseCanonicalInstant } from "../contracts/magicchat.js";
+import {
+  MAGICCHAT_MAX_SEQUENCE,
+  normalizeMagicChatEnvelope,
+  normalizeMagicChatMessageBodyForSend,
+  parseCanonicalInstant,
+  type MagicChatMessageBody,
+  type MagicChatMessageSendPayload,
+  type MagicChatMessagesListPayload,
+  type MagicChatWireMessage,
+} from "../contracts/magicchat.js";
 import type {
   MagicChatAckRequest,
   MagicChatMessageSendRequest,
+  MagicChatMessagesListRequest,
   MagicChatRequestEnvelope,
 } from "./adapter.js";
 
@@ -12,33 +22,14 @@ export interface DeterministicMagicChatSimulatorOptions {
   readonly firstMessageSequence?: number;
 }
 
-export interface SimulatedMagicChatMessageResponse {
+export interface SimulatedMagicChatMessageResponse<Body extends MagicChatMessageBody = MagicChatMessageBody> {
   readonly v: 1;
   readonly id: string;
   readonly kind: "response";
   readonly reply_to: string;
   readonly ok: true;
-  readonly payload: {
-    readonly conversation: {
-      readonly id: string;
-      readonly name: string;
-      readonly type: "app";
-    };
-    readonly created: true;
-    readonly message: {
-      readonly id: string;
-      readonly seq: number;
-      readonly body: {
-        readonly type: "text";
-        readonly content: string;
-      };
-      readonly summary: string;
-      readonly sender: {
-        readonly id: string;
-        readonly type: "app";
-      };
-      readonly created_at: string;
-    };
+  readonly payload: Omit<MagicChatMessageSendPayload, "message"> & {
+    readonly message: Omit<MagicChatWireMessage, "body"> & { readonly body: Body };
   };
 }
 
@@ -48,22 +39,31 @@ export interface SimulatedMagicChatAckResponse {
   readonly kind: "response";
   readonly reply_to: string;
   readonly ok: true;
-  readonly payload: {
-    readonly cursor: number;
-  };
+  readonly payload: { readonly cursor: number };
 }
 
-export type SimulatedMagicChatResponse = SimulatedMagicChatMessageResponse | SimulatedMagicChatAckResponse;
+export interface SimulatedMagicChatMessagesListResponse {
+  readonly v: 1;
+  readonly id: string;
+  readonly kind: "response";
+  readonly reply_to: string;
+  readonly ok: true;
+  readonly payload: MagicChatMessagesListPayload;
+}
+
+export type SimulatedMagicChatResponse =
+  | SimulatedMagicChatMessageResponse
+  | SimulatedMagicChatAckResponse
+  | SimulatedMagicChatMessagesListResponse;
 
 interface RecordedSimulation {
   readonly requestFingerprint: string;
   readonly response: SimulatedMagicChatResponse;
+  readonly expiresAt: number;
 }
 
 function parseFirstMessageSequence(value: unknown): number {
-  if (value === undefined) {
-    return 1;
-  }
+  if (value === undefined) return 1;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
     throw new TypeError("firstMessageSequence must be a positive safe integer");
   }
@@ -80,29 +80,16 @@ function parseAppId(value: unknown): string {
   return value;
 }
 
-function fingerprintRequest(request: MagicChatRequestEnvelope): string {
-  return createHash("sha256").update(JSON.stringify(request), "utf8").digest("hex");
-}
-
-function simulatedMessageId(requestEnvelopeId: string): string {
-  return `simulated-message-${createHash("sha256").update(requestEnvelopeId, "utf8").digest("hex")}`;
-}
-
-function simulatedResponseId(requestEnvelopeId: string): string {
-  return `simulated-response-${createHash("sha256").update(requestEnvelopeId, "utf8").digest("hex")}`;
-}
-
-function isMessageSendRequest(request: MagicChatRequestEnvelope): request is MagicChatMessageSendRequest {
-  return "method" in request && request.method === "message.send";
-}
-
 /**
- * A deliberately in-memory, no-network peer for protocol conformance tests.
- * It models idempotent request handling and cumulative ACK ordering, but it is
- * not evidence of a real MagicChat resource or primary-seam behavior.
+ * In-memory, no-network synthetic peer, not real MagicChat qualification.
+ * Models the pinned ten-minute RPC cache (including reads), durable send dedup,
+ * bounded latest-page history ordering, and stored body normalization.
+ * Goldmark display-summary rendering and cache capacity eviction are not modeled.
  */
 export class DeterministicMagicChatSimulator {
   readonly #recordedByRequestId = new Map<string, RecordedSimulation>();
+  readonly #sentByClientMessageId = new Map<string, SimulatedMagicChatMessageResponse>();
+  readonly #messagesByConversation = new Map<string, MagicChatWireMessage[]>();
   readonly #acknowledgedCursors: number[] = [];
   readonly #appId: string;
   #nextMessageSequence: number;
@@ -121,76 +108,135 @@ export class DeterministicMagicChatSimulator {
     return Object.freeze([...this.#acknowledgedCursors]);
   }
 
+  /** Adds an actual user message to visibility; a choice response never does this. */
+  public observeUserMessage(envelope: unknown): void {
+    const message = normalizeMagicChatEnvelope(envelope);
+    if (message.kind !== "MESSAGE_CREATED") throw new TypeError("visible user input must be message.created");
+    const messages = this.#messagesByConversation.get(message.conversationId) ?? [];
+    const visible: MagicChatWireMessage = Object.freeze({
+      id: message.messageId,
+      seq: message.messageSequence,
+      body: Object.freeze({ type: "text", content: message.body }),
+      created_at: message.messageCreatedAt,
+      summary: message.body,
+      sender: Object.freeze({ id: message.actorId, type: "user", name: "Synthetic User", nickname: "Synthetic User" }),
+    });
+    const existing = messages.find((item) => item.id === visible.id || item.seq === visible.seq);
+    if (existing !== undefined) {
+      if (JSON.stringify(existing) !== JSON.stringify(visible)) throw new Error("visible message identity conflict");
+      return;
+    }
+    messages.push(visible);
+    messages.sort((left, right) => left.seq - right.seq);
+    this.#messagesByConversation.set(message.conversationId, messages);
+    this.#nextMessageSequence = Math.max(this.#nextMessageSequence, message.messageSequence + 1);
+    this.#visibleMessageCount += 1;
+  }
+
+  public respond<Body extends MagicChatMessageBody>(
+    request: MagicChatMessageSendRequest<Body>, respondedAt: unknown,
+  ): SimulatedMagicChatMessageResponse<Body>;
+  public respond(request: MagicChatAckRequest, respondedAt: unknown): SimulatedMagicChatAckResponse;
+  public respond(request: MagicChatMessagesListRequest, respondedAt: unknown): SimulatedMagicChatMessagesListResponse;
+  public respond(request: MagicChatRequestEnvelope, respondedAt: unknown): SimulatedMagicChatResponse;
   public respond(request: MagicChatRequestEnvelope, respondedAt: unknown): SimulatedMagicChatResponse {
-    const requestFingerprint = fingerprintRequest(request);
+    const canonicalRespondedAt = parseCanonicalInstant(respondedAt, "simulated response time");
+    const now = Date.parse(canonicalRespondedAt);
+    const requestFingerprint = createHash("sha256")
+      .update(request.method).update("\0").update(JSON.stringify(request.payload)).digest("hex");
     const recorded = this.#recordedByRequestId.get(request.id);
-    if (recorded !== undefined) {
+    if (recorded !== undefined && now < recorded.expiresAt) {
       if (recorded.requestFingerprint !== requestFingerprint) {
-        throw new Error(`request Envelope ID ${request.id} was reused with different content`);
+        throw new Error(`request_id_conflict: request Envelope ID ${request.id} was reused with different content`);
       }
       return recorded.response;
     }
-
-    const canonicalRespondedAt = parseCanonicalInstant(respondedAt, "simulated response time");
-    const response = isMessageSendRequest(request)
+    // The backend re-executes reads after its cache TTL; request identity is not perpetual read idempotence.
+    const response = request.method === "message.send"
       ? this.#respondToMessageSend(request, canonicalRespondedAt)
-      : this.#respondToAck(request);
-    this.#recordedByRequestId.set(request.id, Object.freeze({ requestFingerprint, response }));
+      : request.method === "conversation.messages.list"
+        ? this.#respondToMessagesList(request)
+        : this.#respondToAck(request);
+    this.#recordedByRequestId.set(request.id, Object.freeze({ requestFingerprint, response, expiresAt: now + 600_000 }));
     return response;
   }
 
-  #respondToMessageSend(
-    request: MagicChatMessageSendRequest,
-    respondedAt: string,
-  ): SimulatedMagicChatMessageResponse {
-    if (!Number.isSafeInteger(this.#nextMessageSequence)) {
-      throw new RangeError("simulated message sequence is exhausted");
+  #respondToMessageSend(request: MagicChatMessageSendRequest, respondedAt: string): SimulatedMagicChatMessageResponse {
+    const body = normalizeMagicChatMessageBodyForSend(request.payload.message);
+    const conversationId = request.payload.target.conversation_id;
+    const clientMessageKey = JSON.stringify([conversationId, request.id]);
+    const previous = this.#sentByClientMessageId.get(clientMessageKey);
+    if (previous !== undefined) {
+      // Durable dedup returns the stored body, even if the retry submitted different bytes after cache expiry.
+      return Object.freeze({ ...previous, payload: Object.freeze({ ...previous.payload, created: false }) });
     }
-    const response = Object.freeze({
-      id: simulatedResponseId(request.id),
-      kind: "response" as const,
-      ok: true as const,
+    if (!Number.isSafeInteger(this.#nextMessageSequence)) throw new RangeError("simulated message sequence is exhausted");
+    // Deliberately synthetic display metadata; no claim to reproduce Goldmark's Markdown summary rendering.
+    const summary = body.type === "markdown"
+      ? "Synthetic Markdown artifact"
+      : body.type === "choice"
+        ? `[选择] ${body.content_type === "markdown" ? "Synthetic Markdown choice" : body.content}`
+        : body.content;
+    const message = Object.freeze({
+      body,
+      created_at: respondedAt,
+      id: `simulated-message-${createHash("sha256").update(clientMessageKey).digest("hex")}`,
+      sender: Object.freeze({ id: this.#appId, type: "app" as const, name: "", nickname: "" }),
+      seq: this.#nextMessageSequence,
+      summary,
+    });
+    const response: SimulatedMagicChatMessageResponse = Object.freeze({
+      id: `simulated-response-${createHash("sha256").update(request.id).digest("hex")}`,
+      kind: "response",
+      ok: true,
       payload: Object.freeze({
-        conversation: Object.freeze({
-          id: request.payload.target.conversation_id,
-          name: "Simulated App Conversation",
-          type: "app" as const,
-        }),
-        created: true as const,
-        message: Object.freeze({
-          body: request.payload.message,
-          created_at: respondedAt,
-          id: simulatedMessageId(request.id),
-          sender: Object.freeze({ id: this.#appId, type: "app" as const }),
-          seq: this.#nextMessageSequence,
-          summary: request.payload.message.content,
-        }),
+        conversation: Object.freeze({ id: conversationId, name: "Simulated App Conversation", type: "app" }),
+        created: true,
+        message,
       }),
       reply_to: request.id,
-      v: 1 as const,
+      v: 1,
     });
+    const messages = this.#messagesByConversation.get(conversationId) ?? [];
+    messages.push(message);
+    this.#messagesByConversation.set(conversationId, messages);
+    this.#sentByClientMessageId.set(clientMessageKey, response);
     this.#nextMessageSequence += 1;
     this.#visibleMessageCount += 1;
     return response;
   }
 
-  #respondToAck(
-    request: MagicChatAckRequest,
-  ): SimulatedMagicChatAckResponse {
-    const cursor = request.payload.cursor;
-    const previousCursor = this.#acknowledgedCursors.at(-1);
-    if (previousCursor !== undefined && cursor <= previousCursor) {
-      throw new Error(`cumulative ACK cursor ${cursor} must be greater than confirmed cursor ${previousCursor}`);
+  #respondToMessagesList(request: MagicChatMessagesListRequest): SimulatedMagicChatMessagesListResponse {
+    const { before_or_equal_seq: upperBound, conversation_id: conversationId } = request.payload;
+    if (!Number.isSafeInteger(upperBound) || upperBound < 1 || upperBound > MAGICCHAT_MAX_SEQUENCE) {
+      throw new TypeError("before_or_equal_seq must be a positive safe integer");
     }
-    const response = Object.freeze({
-      id: simulatedResponseId(request.id),
-      kind: "response" as const,
-      ok: true as const,
+    if (!Number.isSafeInteger(request.payload.limit)) throw new TypeError("messages limit must be an integer");
+    const limit = request.payload.limit <= 0 ? 30 : Math.min(request.payload.limit, 100);
+    const messages = (this.#messagesByConversation.get(conversationId) ?? [])
+      .filter((message) => message.seq <= upperBound).slice(-limit);
+    return Object.freeze({
+      id: `simulated-response-${createHash("sha256").update(request.id).digest("hex")}`,
+      kind: "response",
+      ok: true,
+      payload: Object.freeze({ limit, messages: Object.freeze(messages) }),
+      reply_to: request.id,
+      v: 1,
+    });
+  }
+
+  #respondToAck(request: MagicChatAckRequest): SimulatedMagicChatAckResponse {
+    const cursor = request.payload.cursor;
+    if (!Number.isSafeInteger(cursor) || cursor < 1) throw new TypeError("ACK cursor must be a positive safe integer");
+    const previousCursor = this.#acknowledgedCursors.at(-1);
+    if (previousCursor === undefined || cursor > previousCursor) this.#acknowledgedCursors.push(cursor);
+    return Object.freeze({
+      id: `simulated-response-${createHash("sha256").update(request.id).digest("hex")}`,
+      kind: "response",
+      ok: true,
       payload: Object.freeze({ cursor }),
       reply_to: request.id,
-      v: 1 as const,
+      v: 1,
     });
-    this.#acknowledgedCursors.push(cursor);
-    return response;
   }
 }

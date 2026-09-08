@@ -38,6 +38,7 @@ export {
   WRITER_ARTIFACT_HANDOFF_VERSION,
   type AcceptedEvidenceRef,
 } from "./writer-artifact.js";
+export type { MagicChatApprovalSnapshot } from "./approval-publication.js";
 export { normalizeSyntheticIntake, type NormalizedSyntheticIntake } from "./contracts/intake.js";
 export {
   ANALYST_OUTPUT_SCHEMA,
@@ -66,6 +67,18 @@ export {
   MAGICCHAT_APP_WEBSOCKET_CONTRACT,
   MAGICCHAT_SOURCE_COMMIT,
   normalizeMagicChatEnvelope,
+  MAGICCHAT_MAX_SEQUENCE,
+  parseMagicChatChoiceBody,
+  parseMagicChatMessageBody,
+  normalizeMagicChatMessageBodyForSend,
+  parseMagicChatMessageSendPayload,
+  parseMagicChatMessagesListPayload,
+  type NormalizedMagicChatChoiceResponseCreated,
+  type MagicChatChoiceBody,
+  type MagicChatMessageBody,
+  type MagicChatWireMessage,
+  type MagicChatMessageSendPayload,
+  type MagicChatMessagesListPayload,
   type NormalizedMagicChatEnvelope,
   type NormalizedMagicChatMessageCreated,
   type NormalizedMagicChatResponse,
@@ -114,6 +127,8 @@ export {
   type MagicChatAckRequest,
   type MagicChatChallengeSnapshot,
   type MagicChatMessageSendRequest,
+  type MagicChatChoiceMessageSendRequest,
+  type MagicChatMessagesListRequest,
   type MagicChatPendingRequest,
   type MagicChatProtocolResult,
   type MagicChatProtocolSnapshot,
@@ -126,6 +141,7 @@ export {
   type DeterministicMagicChatSimulatorOptions,
   type SimulatedMagicChatAckResponse,
   type SimulatedMagicChatMessageResponse,
+  type SimulatedMagicChatMessagesListResponse,
   type SimulatedMagicChatResponse,
 } from "./magicchat/simulator.js";
 export {

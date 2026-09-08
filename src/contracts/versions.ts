@@ -3,7 +3,7 @@ export const NORMALIZED_INTAKE_CONTRACT = "accord.normalized-synthetic-intake/v1
 export const CORE_DATABASE_SCHEMA_VERSION = 1 as const;
 /** The generated Researcher/Analyst artifact is a frozen schema-8 handoff. */
 export const RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION = 8 as const;
-export const DATABASE_SCHEMA_VERSION = 10 as const;
+export const DATABASE_SCHEMA_VERSION = 11 as const;
 export const MIGRATION_ID = "001_r003_authority_core" as const;
 export const MIGRATION_FILE = "migrations/001_r003_authority_core.sql" as const;
 export const MAGICCHAT_INGRESS_MIGRATION_ID = "002_r003_magicchat_ingress" as const;
@@ -28,6 +28,10 @@ export const WRITER_ARTIFACT_MIGRATION_ID = "010_r003_writer_artifact" as const;
 export const WRITER_ARTIFACT_MIGRATION_FILE = "migrations/010_r003_writer_artifact.sql" as const;
 export const WRITER_ARTIFACT_MIGRATION_SHA256 = "d1b02b48b2649b93a1cb72e13feabaf6a753e85e90e61f47f5b6ef515db55d3a" as const;
 export const WRITER_ARTIFACT_SCHEMA_FINGERPRINT = "2c9959096d550c9ea06cdf9ac8f598286a55bdf3194c12185bf74d9284a19fd0" as const;
+export const APPROVAL_PUBLICATION_MIGRATION_ID = "011_r003_approval_publication" as const;
+export const APPROVAL_PUBLICATION_MIGRATION_FILE = "migrations/011_r003_approval_publication.sql" as const;
+export const APPROVAL_PUBLICATION_MIGRATION_SHA256 = "571a457be5caa191516228613d91807d86757dae66b24ce5db374385682ed6f3" as const;
+export const APPROVAL_PUBLICATION_SCHEMA_FINGERPRINT = "61ee78bc324397d880158910a563a2694a737d48c7cd285139d8eb59fa9a90b6" as const;
 export const FIXED_WORKFLOW_DEFINITION = "r003-fixed/v1" as const;
 export const FIXED_WORKFLOW_DEFINITION_ID = "workflow_definition_r003_fixed_v1" as const;
 
@@ -47,6 +51,8 @@ export const CORE_CONTRACT_VERSIONS = Object.freeze({
 
 export const CONTRACT_VERSIONS = Object.freeze({
   artifact: "accord.artifact/v1",
+  approvalChallenge: "accord.approval-challenge/v1",
+  publicationFreshness: "accord.publication-freshness/v1",
   ...CORE_CONTRACT_VERSIONS,
   magicChatInboxState: "accord.magicchat-inbox-state/v1",
   magicChatMessage: "accord.magicchat-message/v1",
@@ -96,6 +102,9 @@ export const TRANSACTION_AUTHORITY_TABLES = Object.freeze([
   "runtime_delivery_arrivals",
   "runtime_opaque_completion_receipts",
   "artifacts",
+  "approval_challenges",
+  "publication_freshness",
+  "approval_legacy_provenance",
 ] as const);
 
 export const SQLITE_PRAGMAS = Object.freeze({
