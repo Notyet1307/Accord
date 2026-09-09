@@ -193,7 +193,7 @@ for source_directory in contracts migrations scripts src test; do
   [ -d "$source_directory" ] && [ ! -L "$source_directory" ] \
     || fail "$source_directory must be one regular, non-symlink directory"
 done
-for dependency_directory in node_modules/typescript node_modules/@types/node node_modules/undici-types; do
+for dependency_directory in node_modules/typescript node_modules/@types/node node_modules/undici-types node_modules/ws node_modules/@types/ws; do
   [ -d "$dependency_directory" ] && [ ! -L "$dependency_directory" ] \
     || fail "$dependency_directory must be one installed, non-symlink directory"
 done
@@ -214,8 +214,8 @@ mkdir -p "$VALIDATION_SNAPSHOT/.github/workflows" "$VALIDATION_SNAPSHOT/node_mod
 cp .node-version .npmrc .nvmrc package-lock.json package.json tsconfig.build.json tsconfig.json "$VALIDATION_SNAPSHOT/"
 cp .github/workflows/herdr-delivery-gate.yml "$VALIDATION_SNAPSHOT/.github/workflows/"
 cp -R contracts migrations scripts src test "$VALIDATION_SNAPSHOT/"
-cp -R node_modules/typescript node_modules/undici-types "$VALIDATION_SNAPSHOT/node_modules/"
-cp -R node_modules/@types/node "$VALIDATION_SNAPSHOT/node_modules/@types/"
+cp -R node_modules/typescript node_modules/undici-types node_modules/ws "$VALIDATION_SNAPSHOT/node_modules/"
+cp -R node_modules/@types/node node_modules/@types/ws "$VALIDATION_SNAPSHOT/node_modules/@types/"
 cd "$VALIDATION_SNAPSHOT"
 
 run_node_restricted() {
@@ -254,6 +254,7 @@ run_node_restricted --test-isolation=none --test dist/test/approval-publication.
 run_node_restricted --test-isolation=none --test dist/test/approval-publication-recovery.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/case-trace.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

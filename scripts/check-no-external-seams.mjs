@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { extname, relative } from "node:path";
+import { extname, relative, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const scanRoots = ["scripts", "src", "test"];
@@ -38,6 +39,7 @@ const requiredValidationEntrypoints = [
   "test/approval-publication.integration.test.ts",
   "test/approval-publication-recovery.integration.test.ts",
   "test/case-trace.integration.test.ts",
+  "test/external-transports.conformance.test.ts",
   ...c1TestEntrypoints,
 ];
 const requiredEntrypointSet = new Set(requiredValidationEntrypoints);
@@ -54,6 +56,7 @@ const requiredInvocationMarkers = new Map([
       '"$NPM_BIN" run test:contract',
       '"$NPM_BIN" run test:integration',
       "dist/test/validation-capabilities.integration.test.js",
+      "dist/test/external-transports.conformance.test.js",
       '"$NPM_BIN" run test:conformance',
     ],
   ],
@@ -85,6 +88,7 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted --test-isolation=none --test dist/test/approval-publication-recovery.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/case-trace.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js",
+      "run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js",
       "run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js",
       'contracts/r003-magicchat-handoff.json',
@@ -118,6 +122,49 @@ const javascriptForbidden = [
     "secret-like file read",
   ],
 ];
+
+const transportPaths = new Set(["src/transports/magicchat-websocket.ts", "src/transports/baizhi-responses.ts"]);
+
+/** Parse imports rather than exempting a directory; the virtual-source seam tests transitive bypasses. */
+export function inspectTransportDependencies(sources) {
+  const issues = [];
+  const edges = new Map();
+  for (const { path, source } of sources) {
+    const dependencies = [];
+    const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+    function visit(node) {
+      let specifier;
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) specifier = node.moduleSpecifier;
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
+        specifier = node.arguments[0];
+        if (specifier === undefined || !ts.isStringLiteral(specifier)) {
+          if (path !== capabilityRegression && path !== policySource) issues.push(`${path}: computed module access is not allowed`);
+        }
+      }
+      if (specifier !== undefined && ts.isStringLiteral(specifier)) {
+        const name = specifier.text;
+        if (name.startsWith(".")) dependencies.push(posix.normalize(posix.join(posix.dirname(path), name)).replace(/\.js$/u, ".ts"));
+        else if (!name.startsWith("node:") && path.startsWith("src/") && !(path === "src/transports/magicchat-websocket.ts" && name === "ws")) issues.push(`${path}: unsupported external module ${name}`);
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(tree);
+    edges.set(path, dependencies);
+  }
+  for (const path of edges.keys()) {
+    if (!path.startsWith("src/") || transportPaths.has(path)) continue;
+    const seen = new Set();
+    const queue = [path];
+    while (queue.length > 0) {
+      const next = queue.pop();
+      if (seen.has(next)) continue;
+      seen.add(next);
+      if (transportPaths.has(next)) { issues.push(`${path}: core must not depend on transport ${next}`); break; }
+      queue.push(...(edges.get(next) ?? []));
+    }
+  }
+  return issues;
+}
 const childProcessImport =
   /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["'](?:node:)?child_process["']/u;
 const shellNetworkCommand = /(?:^|\n)\s*(?:exec\s+)?(?:curl|nc|ncat|scp|sftp|ssh|telnet|wget)\b/mu;
@@ -153,6 +200,7 @@ const files = scanRoots
   .sort((left, right) => left.path.localeCompare(right.path));
 const filePaths = new Set(files.map(({ path }) => path));
 const failures = [];
+failures.push(...inspectTransportDependencies(files.filter((file) => !file.path.endsWith(".sh")).map((file) => ({ path: file.path, source: readFileSync(file.url, "utf8") }))));
 
 for (const required of requiredValidationEntrypoints) {
   if (!filePaths.has(required)) {
@@ -237,7 +285,8 @@ for (const file of files) {
 
   if (file.path !== policySource) {
     for (const [pattern, description] of javascriptForbidden) {
-      if (pattern.test(source) && file.path !== capabilityRegression) {
+      const permittedFetch = file.path === "src/transports/baizhi-responses.ts" && description === "direct network API call" && !pattern.test(source.replace(/\bglobalThis\.fetch\s*\(/gu, "transportSend("));
+      if (pattern.test(source) && file.path !== capabilityRegression && !permittedFetch) {
         failures.push(`${file.path}: ${description}`);
       }
     }

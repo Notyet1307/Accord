@@ -35,9 +35,13 @@
   },
   "devDependencies": {
     "@types/node": "24.13.3",
+    "@types/ws": "8.18.1",
     "typescript": "6.0.3"
   },
   "optionalDependencies": {
     "node-bin-darwin-arm64": "24.19.0"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
   }
 }
