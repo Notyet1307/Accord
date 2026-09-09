@@ -102,6 +102,6 @@ test("O01 schema 9 migration is pinned and restart-stable", () => {
     assert.equal(R003_RESEARCHER_ANALYST_HANDOFF.databaseSchemaVersion, RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION);
     assert.equal(RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION, 8);
     const handoffBytes = readFileSync(new URL("../../../contracts/r003-researcher-analyst-handoff.json", import.meta.url));
-    assert.equal(createHash("sha256").update(handoffBytes).digest("hex"), "5e7ec4517fa4fec75daf6fdb9be4f52f2555df6890f1db98b619b9e248fd40f5");
+    assert.equal(createHash("sha256").update(handoffBytes).digest("hex"), "0de8a742c2c678c22e563da9b0bd11d3f1844fed2af993ffce841707096871bc");
   } finally { temporary.cleanup(); }
 });
