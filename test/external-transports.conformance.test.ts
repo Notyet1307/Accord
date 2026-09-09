@@ -200,6 +200,7 @@ test("C5 WebSocket rejects binary, oversized, malformed, unknown and credential-
     (socket) => socket.emit("message", Buffer.from([255]), false),
     (socket) => socket.message({ v: 1, kind: "event", cursor: 1, id: "e", event: "unknown", payload: {} }),
     (socket) => socket.message(magicChatMessageCreatedEnvelope({ body: SECRET })),
+    (socket) => socket.emit("message", Buffer.from(JSON.stringify(magicChatMessageCreatedEnvelope({ body: SECRET })).replace(SECRET, "\\u0073" + SECRET.slice(1))), false),
     (socket) => socket.emit("error", new Error(SECRET)),
   ];
   for (const emit of bad) {
@@ -208,4 +209,39 @@ test("C5 WebSocket rejects binary, oversized, malformed, unknown and credential-
     emit(socket); const reason = await transport.closed;
     assert.equal(reason.includes(SECRET), false); assert.equal(delivered, 0); assert.equal(socket.sent.length, 0);
   }
+});
+
+
+test("C5 explicit reconnect replays a durable request identity without advancing ACK", async (t) => {
+  const temporary = temporaryDatabase("c5-reconnect"); const authority = openAuthorityDatabase(temporary.path);
+  t.after(() => { authority.close(); temporary.cleanup(); });
+  const protocol = new MagicChatProtocolAdapter(authority, "synthetic-app");
+  const event = magicChatMessageCreatedEnvelope();
+  const created = protocol.receive(event, "2026-08-26T00:00:01.000Z"); assert.ok(created.nextRequest);
+  const first = await connection(t);
+  const initial = protocol.dispatch(created.nextRequest.id, "2026-08-26T00:00:02.000Z", (request) => first.transport.send(request));
+  const rejected = assert.rejects(Promise.resolve(initial), /CONNECTION_CLOSED/);
+  first.socket.emit("close"); await rejected;
+  assert.equal(protocol.inspect(1)?.ackState, "NONE");
+  const second = await connection(t, (value) => { protocol.receive(value, "2026-08-26T00:00:05.000Z"); });
+  second.socket.message(event); await microtasks();
+  const pending = protocol.pendingRequests(); assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.request.id, created.nextRequest.id);
+  const replay = protocol.dispatch(created.nextRequest.id, "2026-08-26T00:00:06.000Z", (request) => second.transport.send(request));
+  assert.equal(second.socket.sent[0], first.socket.sent[0]);
+  second.socket.message(magicChatMessageSendSuccessResponse(created.nextRequest.id)); await replay;
+  assert.equal(protocol.inspect(1)?.ackState, "ACK_INTENT");
+});
+
+test("C5 cumulative WebSocket bytes are bounded below the envelope-count limit", async (t) => {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const { socket, transport } = await connection(t, () => held);
+  const frame = JSON.stringify(magicChatMessageCreatedEnvelope()) + " ".repeat(900_000);
+  assert.ok(Buffer.byteLength(frame) < MAGICCHAT_FRAME_MAX_BYTES);
+  for (let i = 0; i < 4; i++) socket.emit("message", Buffer.from(frame), false);
+  assert.equal(socket.closes, 0);
+  socket.emit("message", Buffer.from(frame), false);
+  assert.equal(await transport.closed, "MAGICCHAT_ENVELOPE_REJECTED");
+  assert.equal(socket.sent.length, 0); release();
 });

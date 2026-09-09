@@ -143,7 +143,7 @@ export async function connectMagicChatTransport(
       if (stopped || !opened || socket.readyState !== 1 || socket.bufferedAmount !== 0) fail("MAGICCHAT_NOT_READY");
       let bytes: string;
       try { bytes = requestBytes(request); } catch { return fail("MAGICCHAT_REQUEST_INVALID"); }
-      if (bytes.includes(credential)) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
+      if (bytes.includes(JSON.stringify(credential).slice(1, -1))) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
       if (pending.has(request.id)) fail("MAGICCHAT_REQUEST_PENDING");
       if (pending.size >= MAGICCHAT_QUEUE_MAX_ENVELOPES) fail("MAGICCHAT_PENDING_LIMIT");
       const id = request.id;
@@ -167,8 +167,8 @@ export async function connectMagicChatTransport(
       const size = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
       if (size > MAGICCHAT_FRAME_MAX_BYTES || bufferedBytes + size > MAGICCHAT_QUEUE_MAX_BYTES || bufferedCount + 1 > MAGICCHAT_QUEUE_MAX_ENVELOPES) fail("MAGICCHAT_QUEUE_LIMIT");
       const text = typeof data === "string" ? data : new TextDecoder("utf-8", { fatal: true }).decode(data);
-      if (text.includes(credential)) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
       const value: unknown = JSON.parse(text);
+      if (JSON.stringify(value).includes(JSON.stringify(credential).slice(1, -1))) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
       normalizeMagicChatEnvelope(value);
       const envelope = value as Record<string, unknown>;
       let replyTo: string | undefined;

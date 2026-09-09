@@ -2,7 +2,7 @@
 
 ## 状态与授权
 
-- Revision：`R003-C5/r1`；范围已确认：C5 限定为两个传输适配器及离线验证。Spec 定义实施契约，实际请求定义授权，测试及交付记录定义完成证据。
+- Revision：`R003-C5/r1.1`；范围已确认：C5 限定为两个传输适配器及离线验证。Spec 定义实施契约，实际请求定义授权，测试及交付记录定义完成证据。
 - 实际请求：2026-09-09 用户确认 draft-2 的推荐方案 A，随后明确「先发布 Spec 和 GitHub 任务入口，再开始实现」。这授权依次发布本 Spec、对齐 #45、实施 C5 并进行离线验证；不授权 merge、真实服务/凭据使用、真实故障注入或扩大到 F1/F2/driver。
 - 核验基线：`03a1b899e5a3a54a9f49dd997dfc9ecb62e75c4c`。这是代码基线，不是包含本草案的提交。
 - 本文细化已有 R003，不创建或承诺 R004。工作区候选仍是后续方向。
@@ -97,7 +97,7 @@ C5 包含两个可以独立验收的外部接缝。实现应按接缝分别交�
 
 静态检查只为上表两个源码文件开放相应 import/API 类别，保留 ambient environment/秘密读取拒绝；核心和其他测试仍禁止网络 import。检查核心到 wrapper 的直接及间接 import 边，不能只有按文本路径排除；新增回归证明扩大豁免、动态旁路或在测试中访问真实 I/O 失败。wrapper import 本身不连接、不读取配置；只有显式 factory 才可产生能力。普通 CI 的新增 transport 套件也在既有无网络 preload/权限下运行，不能只在 unrestricted Node 中验证。
 
-MagicChat 需要自定义握手 headers，现有运行依赖没有相应 WebSocket client。本 Spec 选择唯一新增运行依赖 `ws@8.21.3`（2026-09-09 npm registry 查询），类型依赖 `@types/ws@8.18.1`；本轮未安装。其 [固定版本文档](https://github.com/websockets/ws/blob/8.21.3/doc/ws.md) 支持 headers、握手超时、自动 pong、payload 限制及关闭重定向。百智侧复用原生 fetch，不新增模型 SDK。后续 lockfile 必须固定 integrity，并为可信离线验证提供实际只读缓存；不凭 registry 可达推断离线 qualification 可用。
+MagicChat 需要自定义握手 headers，现有运行依赖没有相应 WebSocket client。本 Spec 选择唯一新增运行依赖 `ws@8.21.3`（2026-09-09 npm registry 查询），类型依赖 `@types/ws@8.18.1`。其 [固定版本文档](https://github.com/websockets/ws/blob/8.21.3/doc/ws.md) 支持 headers、握手超时、自动 pong、payload 限制及关闭重定向。百智侧复用原生 fetch，不新增模型 SDK。后续 lockfile 必须固定 integrity，并为可信离线验证提供实际只读缓存；不凭 registry 可达推断离线 qualification 可用。
 
 live 入口、秘密文件 loader 和 driver 目前不在上述能力清单内；缺口解决后应在对应 Spec 逐文件列明，不能现在预留整个目录的权限。
 
@@ -157,9 +157,9 @@ live 入口、秘密文件 loader 和 driver 目前不在上述能力清单内�
 | C5-A7 | 假凭据 canary 不出现在错误、日志或返回证据中；超时/关闭只操作本实例资源，没有全局进程或文件清理 |
 | C5-A8 | 现有 `validate-ci.sh` 完整通过并纳入受限 transport 套件；PR 证据包含实际命令、结果、依赖锁定与 checked SHA，单独列明可信 operator qualification 和真实外部验收状态 |
 
-后续实施需更新的验证接缝限于 `package.json`、`package-lock.json`、`scripts/check-no-external-seams.mjs`、`scripts/validate-ci.sh`、`scripts/validate-project.sh` 以及 `test/validation-capabilities.integration.test.ts`，用于依赖固定、精确能力与测试入口。保留 `scripts/runtime-capability-guard.mjs` 的拒绝能力，不开放网络；保持 GitHub workflow/check 名称不变。若必须增加其他有网络/秘密能力的文件或放宽核心权限，返回 Spec 修订，不能自动扩大清单。
+后续实施需更新的验证接缝限于 `package.json`、`package-lock.json`、`scripts/check-no-external-seams.mjs`、`scripts/validate-ci.sh`、`scripts/validate-project.sh`、`test/contracts.test.ts` 的精确依赖版本断言以及 `test/validation-capabilities.integration.test.ts`，用于依赖固定、精确能力与测试入口。保留 `scripts/runtime-capability-guard.mjs` 的拒绝能力，不开放网络；保持 GitHub workflow/check 名称不变。若必须增加其他有网络/秘密能力的文件或放宽核心权限，返回 Spec 修订，不能自动扩大清单。
 
-交付时必须实际执行固定 Node/npm 下的 `TMPDIR=/private/tmp ./scripts/validate-ci.sh`，其脚本应显式运行编译后的 `dist/test/external-transports.conformance.test.js` 并施加上述无网络限制。不新增默认 live 启动命令。可信 `validate-delivery.sh` 的依赖缓存/边界条件仍由 operator 建立，缺失时如实报告未验证。当前仅准备文档，没有执行新增套件或产生 C5 测试通过证据。
+交付时必须实际执行固定 Node/npm 下的 `TMPDIR=/private/tmp ./scripts/validate-ci.sh`，其脚本应显式运行编译后的 `dist/test/external-transports.conformance.test.js` 并施加上述无网络限制。不新增默认 live 启动命令。可信 `validate-delivery.sh` 的依赖缓存/边界条件仍由 operator 建立，缺失时如实报告未验证。实际执行结果由当前代码 revision 的验证记录提供。r1.1 仅补充新增固定 WebSocket 依赖所需的精确版本断言位置，不修改冻结 Oracle 或 handoff。
 
 后续 Live 准备另行要求 driver 的稳定等待、失败、恢复与完成；独立真实验收另留外部调用、精确人工批准、两处恢复窗口、唯一结果及 Trace。这些不属于 C5-A1–A8，也不能因 C5 通过被视为满足。
 

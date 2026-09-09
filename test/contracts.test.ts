@@ -195,6 +195,7 @@ test("toolchain and strict compiler facts are exact in the clean snapshot", () =
   const packageJson = JSON.parse(readFileSync(new URL("package.json", repositoryRoot), "utf8")) as {
     engines?: Record<string, unknown>;
     packageManager?: unknown;
+    dependencies?: Record<string, unknown>;
     devDependencies?: Record<string, unknown>;
     optionalDependencies?: Record<string, unknown>;
     type?: unknown;
@@ -212,8 +213,11 @@ test("toolchain and strict compiler facts are exact in the clean snapshot", () =
   assert.equal(packageJson.type, "module");
   assert.deepEqual(packageJson.engines, { node: "24.19.0", npm: "11.17.0" });
   assert.equal(packageJson.packageManager, "npm@11.17.0");
-  assert.deepEqual(packageJson.devDependencies, { "@types/node": "24.13.3", typescript: "6.0.3" });
+  assert.deepEqual(packageJson.devDependencies, { "@types/node": "24.13.3", "@types/ws": "8.18.1", typescript: "6.0.3" });
   assert.deepEqual(packageJson.optionalDependencies, { "node-bin-darwin-arm64": "24.19.0" });
+  assert.deepEqual(packageJson.dependencies, { ws: "8.21.3" });
+  assert.equal(lockfile.packages?.["node_modules/ws"]?.["version"], "8.21.3");
+  assert.equal(lockfile.packages?.["node_modules/@types/ws"]?.["version"], "8.18.1");
   assert.equal(lockfile.lockfileVersion, 3);
   assert.equal(lockfile.packages?.["node_modules/typescript"]?.["version"], "6.0.3");
   assert.equal(lockfile.packages?.["node_modules/@types/node"]?.["version"], "24.13.3");

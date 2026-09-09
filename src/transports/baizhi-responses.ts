@@ -109,7 +109,7 @@ export function prepareBaizhiResponsesPort(
     instructions, input: JSON.stringify({ objective: prepared.objective, outputSchema: prepared.outputSchema, entries: prepared.entries, approvedSources: prepared.approvedSources }),
   });
   if (Buffer.byteLength(body) > BAIZHI_REQUEST_MAX_BYTES) fail("PROVIDER_REQUEST_TOO_LARGE");
-  if (body.includes(credential)) fail("PROVIDER_CREDENTIAL_REFLECTION");
+  if (body.includes(JSON.stringify(credential).slice(1, -1))) fail("PROVIDER_CREDENTIAL_REFLECTION");
   const safeCodes = new Set(["PROVIDER_RESPONSE_TOO_LARGE", "PROVIDER_RESPONSE_INVALID", "PROVIDER_MODEL_IDENTITY_MISMATCH", "PROVIDER_IDENTITY_INVALID", "PROVIDER_USAGE_INVALID", "PROVIDER_WIRE_TOO_LARGE", "PROVIDER_TIMEOUT", "PROVIDER_CREDENTIAL_REFLECTION"]);
   const attempted = new Set<string>();
   return Object.freeze({
@@ -126,12 +126,14 @@ export function prepareBaizhiResponsesPort(
       try {
         return await Promise.race([timeout, (async () => {
           const response = await send(responsesUrl, { method: "POST", redirect: "error", headers: { "Content-Type": "application/json", Authorization: `Bearer ${credential}` }, body, signal: controller.signal });
-          if (controller.signal.aborted) fail("PROVIDER_TIMEOUT");
-          if (response.redirected || (response.url !== "" && response.url !== responsesUrl)) fail("PROVIDER_RESPONSE_INVALID");
+          if (controller.signal.aborted || response.redirected || (response.url !== "" && response.url !== responsesUrl)) {
+            void response.body?.cancel().catch(() => undefined);
+            fail(controller.signal.aborted ? "PROVIDER_TIMEOUT" : "PROVIDER_RESPONSE_INVALID");
+          }
           if (!response.ok) { void response.body?.cancel().catch(() => undefined); fail("PROVIDER_HTTP_ERROR"); }
           const raw = await boundedBody(response, controller.signal);
           const wire = mapResponse(raw, response.headers.get("x-request-id"), prepared, deploymentId);
-          if (wire.includes(credential)) fail("PROVIDER_CREDENTIAL_REFLECTION");
+          if (wire.includes(JSON.stringify(credential).slice(1, -1))) fail("PROVIDER_CREDENTIAL_REFLECTION");
           return wire;
         })()]);
       } catch (error) {
