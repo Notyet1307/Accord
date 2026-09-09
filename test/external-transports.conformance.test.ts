@@ -115,7 +115,7 @@ test("C5 body reads remain bounded after headers and terminate on timeout", asyn
   let finishSend: (value: Response) => void = () => undefined;
   let lateCancelled = false;
   const latePort = prepareBaizhiResponsesPort(config, prepared, "Return JSON", () => new Promise<Response>((resolve) => { finishSend = resolve; }));
-  const lateCheck = assert.rejects(latePort.complete(completion(prepared)), /PROVIDER_TIMEOUT/);
+  const lateCheck = assert.rejects(Promise.resolve(latePort.complete(completion(prepared))), /PROVIDER_TIMEOUT/);
   t.mock.timers.tick(BAIZHI_TIMEOUT_MS); await lateCheck;
   finishSend(new Response(new ReadableStream({ cancel() { lateCancelled = true; } })));
   await microtasks(); assert.equal(lateCancelled, true);
