@@ -255,6 +255,7 @@ run_node_restricted --test-isolation=none --test dist/test/approval-publication-
 run_node_restricted --test-isolation=none --test dist/test/case-trace.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js
+run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

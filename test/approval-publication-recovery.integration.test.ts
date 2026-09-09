@@ -85,7 +85,7 @@ test("C3 populated schema10 upgrade preserves all C2 bytes and creates one truth
     const upgraded = openAuthorityDatabase(value.temporary.path); upgraded.close();
     const finishedAt = Date.now();
     inspect(value.temporary.path, (database) => {
-      assert.equal(database.prepare("PRAGMA user_version").get()?.["user_version"], 11);
+      assert.equal(database.prepare("PRAGMA user_version").get()?.["user_version"], 12);
       for (const table of before) {
         const current = rows(database, `SELECT ${table.columns} FROM ${quote(table.name)}`);
         for (const bytes of table.bytes) assert.ok(current.includes(bytes), `${table.name} historical row must remain byte-identical`);

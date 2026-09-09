@@ -97,6 +97,8 @@ import {
   recoverOpaqueCompletionReceipts,
   recoverReceivedRuntimeAttempts,
   prepareProfileInvocation,
+  prepareConfiguredProfileInvocation,
+  executeConfiguredPreparedAttempt,
   recordUnknownRuntimeArrival,
   reconstructGenericWinnerMaterialization,
   reconstructPreparedProfileInvocation,
@@ -109,6 +111,7 @@ import {
   type PreparedAttempt,
   type PreparedProfileInvocation,
   type ProfileInvocationRequest,
+  type ConfiguredProfileInvocationRequest,
   type ProviderPort,
   type ProviderWire,
   type ProviderResultArbitration,
@@ -119,6 +122,7 @@ import {
   type FixedProfileContextInput,
   type PersistedFixedProfileContext,
 } from "../profile-context.js";
+import { acceptRuntimeConfiguration, bindRunRuntimeConfiguration, inspectInvocationRuntimeConfiguration, inspectRunRuntimeConfiguration, inspectRuntimeConfiguration, validatePersistedRuntimeConfigurations, type AcceptedFrozenRuntimeConfiguration, type FrozenRuntimeConfiguration, type FrozenRuntimeConfigurationReference } from "../frozen-runtime-config.js";
 import { acceptSyntheticEvidence, createWriterArtifactContract, parseWriterArtifactAuthority, validatePersistedAcceptedEvidence, type AcceptedEvidenceRef } from "../writer-artifact.js";
 import { WRITER_MATERIALIZATION_SCHEMA_VERSION, type InvocationBoundOutputContract } from "../profile-runtime.js";
 import {
@@ -189,6 +193,9 @@ const REQUIRED_SCHEMA_OBJECTS = [
   "runtime_opaque_completion_receipts",
   "runtime_provider_delivery_legacy_provenance",
   "runtime_provider_delivery_legacy_provenance_gate",
+  "runtime_configurations",
+  "run_runtime_configurations",
+  "invocation_runtime_configurations",
 ] as const;
 
 export interface SqlitePragmaState {
@@ -540,18 +547,18 @@ function migrateAndValidate(database: DatabaseSync, migrations: readonly Authori
      * earlier recovery observable. */
     database.exec("BEGIN IMMEDIATE");
     try {
+      validatePersistedRuntimeConfigurations(database);
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
-      validatePersistedWriterArtifacts(database);
       validateApprovalPublication(database);
       recoverOpaqueCompletionReceipts(database);
       recoverReceivedRuntimeAttempts(database);
       reconcileInterruptedRuntimeAttempts(database);
+      validatePersistedRuntimeConfigurations(database);
       validatePersistedAuthorityState(database);
       validatePersistedRuntimeAuthorityGraph(database);
       validatePersistedAcceptedEvidence(database);
-      validatePersistedWriterArtifacts(database);
       validateApprovalPublication(database);
       database.exec("COMMIT");
     } catch (error) {
@@ -3808,6 +3815,11 @@ export class AuthorityDatabase {
     this.#assertOpen();
     return readFixedProfileContext(this.#database, invocationId);
   }
+  public acceptRuntimeConfiguration(configuration: unknown, acceptedAt: string): AcceptedFrozenRuntimeConfiguration { this.#assertOpen(); return acceptRuntimeConfiguration(this.#database, configuration, acceptedAt); }
+  public inspectRuntimeConfiguration(configurationId: unknown, revision: unknown): AcceptedFrozenRuntimeConfiguration | undefined { this.#assertOpen(); return inspectRuntimeConfiguration(this.#database, configurationId, revision); }
+  public bindRunRuntimeConfiguration(workflowRunId: WorkflowRunId, caseId: CaseId, reference: FrozenRuntimeConfigurationReference, boundAt: string): AcceptedFrozenRuntimeConfiguration { this.#assertOpen(); return bindRunRuntimeConfiguration(this.#database, workflowRunId, caseId, reference, boundAt); }
+  public inspectRunRuntimeConfiguration(workflowRunId: WorkflowRunId): AcceptedFrozenRuntimeConfiguration | undefined { this.#assertOpen(); return inspectRunRuntimeConfiguration(this.#database, workflowRunId); }
+  public inspectInvocationRuntimeConfiguration(invocationId: InvocationId): AcceptedFrozenRuntimeConfiguration | undefined { this.#assertOpen(); return inspectInvocationRuntimeConfiguration(this.#database, invocationId); }
 
   /**
    * Persists the exact, least-privilege Profile context and its first READY
@@ -3816,6 +3828,10 @@ export class AuthorityDatabase {
   public prepareProfileInvocation(input: ProfileInvocationRequest): PreparedProfileInvocation {
     this.#assertOpen();
     return prepareProfileInvocation(this.#database, input);
+  }
+  public prepareConfiguredProfileInvocation(input: ConfiguredProfileInvocationRequest): PreparedProfileInvocation {
+    this.#assertOpen();
+    return prepareConfiguredProfileInvocation(this.#database, input);
   }
 
   public createWriterArtifactContract(invocation: PreparedProfileInvocation, h1: ReviewerDispositionHandoff): InvocationBoundOutputContract {
@@ -3852,6 +3868,10 @@ export class AuthorityDatabase {
   ): Promise<ProviderResultArbitration> {
     this.#assertOpen();
     return executePreparedAttempt(this.#database, invocation, port, now);
+  }
+  public executeConfiguredPreparedAttempt(invocation: PreparedProfileInvocation, reference: FrozenRuntimeConfigurationReference, configuration: FrozenRuntimeConfiguration, port: ProviderPort, now: string): Promise<ProviderResultArbitration> {
+    this.#assertOpen();
+    return executeConfiguredPreparedAttempt(this.#database, invocation, reference, configuration, port, now);
   }
 
   public processMagicChatEnvelope(

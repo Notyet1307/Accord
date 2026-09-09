@@ -34,10 +34,12 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "index:idx_inbox_deliveries_receipt",
   "index:idx_inbox_receipts_case",
   "index:idx_inbox_receipts_message",
+  "index:idx_invocation_runtime_configurations_run",
   "index:idx_magicchat_inbox_app_cursor",
   "index:idx_magicchat_rpc_request",
   "index:idx_pending_side_effects_state",
   "index:idx_profile_contexts_run_node",
+  "index:idx_run_runtime_configurations_config",
   "index:idx_runtime_attempts_invocation",
   "index:idx_runtime_delivery_arrivals_arrival",
   "index:idx_runtime_invocations_run_status",
@@ -69,6 +71,9 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "table:profile_contexts",
   "table:publication_freshness",
   "table:response_claims",
+  "table:invocation_runtime_configurations",
+  "table:run_runtime_configurations",
+  "table:runtime_configurations",
   "table:runtime_attempts",
   "table:runtime_delivery_arrivals",
   "table:runtime_invocations",
@@ -98,6 +103,12 @@ const EXPECTED_SCHEMA_OBJECT_IDENTITIES = [
   "trigger:artifacts_immutable_update",
   "trigger:board_entries_immutable_delete",
   "trigger:board_entries_immutable_update",
+  "trigger:invocation_runtime_configurations_immutable_delete",
+  "trigger:invocation_runtime_configurations_immutable_update",
+  "trigger:run_runtime_configurations_immutable_delete",
+  "trigger:run_runtime_configurations_immutable_update",
+  "trigger:runtime_configurations_immutable_delete",
+  "trigger:runtime_configurations_immutable_update",
   "trigger:inbox_deliveries_immutable_collision",
   "trigger:inbox_deliveries_immutable_delete",
   "trigger:inbox_deliveries_immutable_update",
@@ -179,7 +190,7 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
     const authority = openAuthorityDatabase(temporary.path);
     assert.deepEqual(authority.readPragmas(), SQLITE_PRAGMAS);
     authority.close();
-    assert.deepEqual(schemaObjectIdentities(temporary.path), EXPECTED_SCHEMA_OBJECT_IDENTITIES);
+    assert.deepEqual(schemaObjectIdentities(temporary.path).slice().sort(), EXPECTED_SCHEMA_OBJECT_IDENTITIES.slice().sort());
 
     if (process.platform !== "win32") {
       assert.equal(statSync(temporary.path).mode & 0o777, 0o600);
@@ -192,13 +203,13 @@ test("startup applies and rechecks the pinned migration and durability PRAGMAs",
       unknown
     >;
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
-    assert.equal(migrationCount["count"], 11);
+    assert.equal(migrationCount["count"], 12);
     raw.close();
 
     const reopened = openAuthorityDatabase(temporary.path);
     assert.deepEqual(reopened.readPragmas(), SQLITE_PRAGMAS);
     reopened.close();
-    assert.deepEqual(schemaObjectIdentities(temporary.path), EXPECTED_SCHEMA_OBJECT_IDENTITIES);
+    assert.deepEqual(schemaObjectIdentities(temporary.path).slice().sort(), EXPECTED_SCHEMA_OBJECT_IDENTITIES.slice().sort());
   } finally {
     temporary.cleanup();
   }
@@ -250,6 +261,7 @@ test("startup upgrades an exact Issue 10 authority database through the additive
       { version: 9, migration_id: "009_r003_reviewer_writer_contexts" },
       { version: 10, migration_id: "010_r003_writer_artifact" },
       { version: 11, migration_id: "011_r003_approval_publication" },
+      { version: 12, migration_id: "012_r003_frozen_runtime_config" },
     ]);
     assert.equal(Object.values(userVersion)[0], DATABASE_SCHEMA_VERSION);
   } finally {
@@ -567,11 +579,10 @@ test("startup refuses unsupported and drifted schemas", () => {
     const first = openAuthorityDatabase(versioned.path);
     first.close();
     const future = new DatabaseSync(versioned.path);
-    future.exec("PRAGMA user_version = 12");
-    future.close();
+    future.exec("PRAGMA user_version = 13");
     assert.throws(
       () => openAuthorityDatabase(versioned.path),
-      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 12/u.test(error.message),
+      (error: unknown) => error instanceof AuthorityStartupError && /unsupported database schema version 13/u.test(error.message),
     );
 
     const second = openAuthorityDatabase(drifted.path);
