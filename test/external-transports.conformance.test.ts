@@ -71,6 +71,9 @@ test("C5 rejects ambiguous, incomplete, secret-reflecting and identity-invalid p
     () => response({ status: "incomplete" }), () => response({ error: { message: SECRET } }), () => response({ model: "other" }),
     () => response({ id: "" }), () => response({}, null), () => response({}, "one,two"),
     () => response({ usage: null }), () => response({ usage: { input_tokens: 10, output_tokens: 5, total_tokens: 99 } }),
+    () => response({ usage: { input_tokens: 10, output_tokens: 8193, total_tokens: 8203 } }),
+    () => response({ usage: { input_tokens: -1, output_tokens: 5, total_tokens: 4 } }),
+    () => new Response("not JSON"),
     () => response({ output: [] }), () => response({ output: [{ type: "function_call" }] }),
     ...["refusal", "output_text"].map((type) => () => response({ output: [{ type: "message", role: "assistant", content: [{ type, text: "```json\n{}\n```" }] }] })),
     () => response({ output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "{}" }, { type: "output_text", text: "{}" }] }] }),
@@ -109,6 +112,13 @@ test("C5 body reads remain bounded after headers and terminate on timeout", asyn
   const check = assert.rejects(async () => pending, /PROVIDER_TIMEOUT/);
   await microtasks(); t.mock.timers.tick(BAIZHI_TIMEOUT_MS); await check;
   assert.equal(signal?.aborted, true); assert.equal(cancelled, true);
+  let finishSend: (value: Response) => void = () => undefined;
+  let lateCancelled = false;
+  const latePort = prepareBaizhiResponsesPort(config, prepared, "Return JSON", () => new Promise<Response>((resolve) => { finishSend = resolve; }));
+  const lateCheck = assert.rejects(latePort.complete(completion(prepared)), /PROVIDER_TIMEOUT/);
+  t.mock.timers.tick(BAIZHI_TIMEOUT_MS); await lateCheck;
+  finishSend(new Response(new ReadableStream({ cancel() { lateCancelled = true; } })));
+  await microtasks(); assert.equal(lateCancelled, true);
   const tooLarge = prepareBaizhiResponsesPort(config, prepared, "Return JSON", async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(BAIZHI_RESPONSE_MAX_BYTES)); controller.enqueue(new Uint8Array(1)); controller.close(); } })));
   await assert.rejects(async () => tooLarge.complete(completion(prepared)), /PROVIDER_RESPONSE_TOO_LARGE/);
 });
