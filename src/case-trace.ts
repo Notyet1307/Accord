@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { parseMagicChatMessageSendPayload, parseMagicChatMessagesListPayload } from "./contracts/magicchat.js";
-import { CONTRACT_VERSIONS, DATABASE_SCHEMA_VERSION, FIXED_WORKFLOW_DEFINITION, FIXED_WORKFLOW_DEFINITION_ID } from "./contracts/versions.js";
+import { CONTRACT_VERSIONS, FIXED_WORKFLOW_DEFINITION, FIXED_WORKFLOW_DEFINITION_ID } from "./contracts/versions.js";
 import { parseCaseId, parseInvocationId, type CaseId } from "./core/ids.js";
 import { reconstructPreparedProfileInvocation } from "./researcher-analyst.js";
 import { parsePersistenceRow, requireHexDigest, requireInteger, requireIsoInstant, requireOneOf, requireString } from "./persistence/rows.js";
+import { loadAuthorityMigrations } from "./persistence/migration.js";
 
 export const R003_CASE_TRACE_VERSION = "accord.r003-case-trace/v1" as const;
 export const R003_CASE_TRACE_REDACTION_VERSION = "accord.r003-case-trace-redaction/v1" as const;
@@ -541,10 +542,12 @@ function publication(database: DatabaseSync, caseId: string, boardId: string, wo
       r.schema_version AS rpc_schema_version, r.case_id AS rpc_case_id, r.workflow_run_id AS rpc_workflow_run_id,
       r.receipt_id AS rpc_receipt_id, r.request_envelope_id, r.rpc_method, r.request_json, r.request_digest,
       r.confirmed_external_id, r.created_at AS rpc_created_at, r.confirmed_at, r.dispatched_at, r.confirmation_json
-    FROM pending_side_effects p LEFT JOIN magicchat_rpc_actions r ON r.action_id = p.action_id
+    FROM pending_side_effects p LEFT JOIN magicchat_rpc_actions r ON r.action_id = p.action_id AND r.case_id = p.case_id AND r.workflow_run_id = p.workflow_run_id AND (r.receipt_id IS p.receipt_id OR (r.receipt_id IS NULL AND p.receipt_id IS NULL))
     WHERE p.case_id = ? AND p.workflow_run_id = ? ORDER BY p.created_at, p.action_id`, caseId, workflowRunId).map((row) => {
     const actionId = id(row, "action_id", "action_", 71);
     if (text(row, "schema_version") !== CONTRACT_VERSIONS.pendingSideEffect || text(row, "case_id") !== caseId || text(row, "workflow_run_id") !== workflowRunId) fail(`Action ${actionId} binding is invalid`);
+    if (row["request_json"] !== null && text(row, "rpc_schema_version") !== CONTRACT_VERSIONS.magicChatRpcAction) fail(`Action ${actionId} RPC schema binding is invalid`);
+    if (row["request_json"] !== null && (text(row, "rpc_case_id") !== caseId || text(row, "rpc_workflow_run_id") !== workflowRunId || text(row, "rpc_receipt_id") !== text(row, "receipt_id"))) fail(`Action ${actionId} RPC authority binding is invalid`);
     const requestJson = row["request_json"] === null ? null : objectJson(row, "request_json");
     const rpcMethod = nullableText(row, "rpc_method");
     if (requestJson !== null && rpcMethod !== null) {
@@ -738,10 +741,16 @@ export interface GeneratedR003CaseTrace {
 }
 
 function validateAuthoritySnapshot(database: DatabaseSync): void {
-  const latest = one(database, "SELECT version, migration_id FROM accord_schema_migrations ORDER BY version DESC LIMIT 1");
-  if (latest === undefined || integer(latest, "version") !== DATABASE_SCHEMA_VERSION) fail("authority schema is not at the pinned R003 version");
+  const actual = rows(database, "SELECT version, migration_id, migration_sha256, schema_fingerprint FROM accord_schema_migrations ORDER BY version");
+  const expected = loadAuthorityMigrations();
+  if (actual.length !== expected.length || actual.some((row, index) => { const migration = expected[index]; return migration === undefined || integer(row, "version") !== migration.version || text(row, "migration_id") !== migration.id || hex(row, "migration_sha256") !== migration.sha256 || hex(row, "schema_fingerprint") !== migration.schemaFingerprint; })) fail("authority schema is not at the pinned R003 migration chain");
   if (one(database, "PRAGMA integrity_check")?.["integrity_check"] !== "ok") fail("SQLite integrity check failed");
   if (rows(database, "PRAGMA foreign_key_check").length !== 0) fail("SQLite foreign-key check failed");
+}
+
+function assertTraceBudget(database: DatabaseSync, maxBytes: number): void {
+  const auditCount = Number((one(database, "SELECT COUNT(*) AS count FROM audit_events") ?? { count: 0 }).count);
+  if (auditCount > Math.max(1, Math.floor(maxBytes / 128))) throw new CaseTraceError("OUTPUT_LIMIT", "Case Trace exceeds its output limit");
 }
 
 /** Projects one complete, allowlisted and deterministic Case Trace from a validated authority snapshot. */
@@ -751,6 +760,7 @@ export function generateR003CaseTrace(database: DatabaseSync, suppliedCaseId: un
   try {
     database.exec("BEGIN DEFERRED");
     validateAuthoritySnapshot(database);
+    assertTraceBudget(database, maxBytes);
     const identity = one(database, `SELECT c.case_id, c.schema_version AS case_schema_version, c.status AS case_status, c.board_id, c.workflow_run_id,
         c.source_app_id, c.source_conversation_id, c.source_message_id, c.created_at AS case_created_at,
         b.schema_version AS board_schema_version, b.revision AS board_revision, b.created_at AS board_created_at,
