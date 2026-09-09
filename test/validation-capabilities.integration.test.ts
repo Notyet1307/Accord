@@ -50,6 +50,7 @@ test("C5 dependency inventory denies direct, transitive, package and computed tr
     [{ path: "src/core.ts", source: 'import "../test/bridge.js";' }, { path: "test/bridge.ts", source: 'import "../src/transports/magicchat-websocket.js";' }],
     [{ path: "src/core.ts", source: 'import("./transports/" + name);' }],
     [{ path: "src/core.ts", source: 'import "ws";' }],
+    [{ path: "test/bypass.test.ts", source: 'import "ws";' }],
   ]) assert.ok(inspectTransportDependencies(sources).length > 0);
   assert.deepEqual(inspectTransportDependencies([{ path: "src/transports/magicchat-websocket.ts", source: 'import("ws");' }, { path: "src/core.ts", source: 'import "node:crypto";' }]), []);
 });

@@ -144,7 +144,7 @@ export function inspectTransportDependencies(sources) {
       if (specifier !== undefined && ts.isStringLiteral(specifier)) {
         const name = specifier.text;
         if (name.startsWith(".")) dependencies.push(posix.normalize(posix.join(posix.dirname(path), name)).replace(/\.js$/u, ".ts"));
-        else if (!name.startsWith("node:") && path.startsWith("src/") && !(path === "src/transports/magicchat-websocket.ts" && name === "ws")) issues.push(`${path}: unsupported external module ${name}`);
+        else if (!name.startsWith("node:") && (path.startsWith("src/") || name === "ws") && !(path === "src/transports/magicchat-websocket.ts" && name === "ws")) issues.push(`${path}: unsupported external module ${name}`);
       }
       ts.forEachChild(node, visit);
     }
