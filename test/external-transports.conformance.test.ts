@@ -223,8 +223,9 @@ test("C5 explicit reconnect replays a durable request identity without advancing
   const rejected = assert.rejects(Promise.resolve(initial), /CONNECTION_CLOSED/);
   first.socket.emit("close"); await rejected;
   assert.equal(protocol.inspect(1)?.ackState, "NONE");
-  const second = await connection(t, (value) => { protocol.receive(value, "2026-08-26T00:00:05.000Z"); });
-  second.socket.message(event); await microtasks();
+  let receiveError: unknown;
+  const second = await connection(t, (value) => { try { protocol.receive(value, "2026-08-26T00:00:05.000Z"); } catch (error) { receiveError = error; throw error; } });
+  second.socket.message({ ...event, id: "event-reconnected-delivery" }); await microtasks(); assert.ifError(receiveError);
   const pending = protocol.pendingRequests(); assert.equal(pending.length, 1);
   assert.equal(pending[0]?.request.id, created.nextRequest.id);
   const replay = protocol.dispatch(created.nextRequest.id, "2026-08-26T00:00:06.000Z", (request) => second.transport.send(request));
