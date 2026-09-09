@@ -58,6 +58,7 @@ import {
 import { persistWriterArtifact } from "./writer-artifact.js";
 import { parseReviewerDispositionHandoff } from "./reviewer-disposition.js";
 import type { ReviewerDispositionHandoff } from "./contracts/reviewer-disposition.js";
+import { CONFIG_BOUND_PROFILE_CONTEXT_VERSION, assertRuntimeConfigurationSource, assertRuntimeConfigurationWindow, bindRunRuntimeConfiguration, inspectInvocationRuntimeConfiguration, inspectRunRuntimeConfiguration, preflightRuntimeConfiguration, requireRuntimeConfiguration, validatePersistedRuntimeConfigurations, type FrozenRuntimeConfiguration, type FrozenRuntimeConfigurationReference } from "./frozen-runtime-config.js";
 
 /** The fixed, no-network provider boundary used by this Issue. */
 export const NATIVE_BAIZHI_PROVIDER_PORT_VERSION = "accord.native-baizhi-provider-port/v1" as const;
@@ -92,12 +93,14 @@ export const TRUSTED_SYNTHETIC_SOURCE_INPUT = Object.freeze({
 export const TRUSTED_SYNTHETIC_SOURCE_MANIFEST_VERSION = "accord.r003-approved-synthetic-sources/v1" as const;
 /** Public request data only. The trusted source manifest is selected internally. */
 export interface ProfileInvocationRequest { readonly caseId: CaseId; readonly profile: Profile; readonly modelId: string; readonly now: string; }
+export interface ConfiguredProfileInvocationRequest { readonly caseId: CaseId; readonly profile: Profile; readonly configuration: FrozenRuntimeConfigurationReference; readonly now: string; }
 export interface ContextEntry { readonly id: BoardEntryId; readonly type: EntryType; readonly digest: string; readonly payload: Readonly<Record<string, unknown>>; }
 export interface PreparedProfileInvocation {
   readonly contextId: ContextId; readonly invocationId: InvocationId; readonly caseId: CaseId; readonly workflowRunId: WorkflowRunId; readonly boardId: BoardId;
   readonly profile: Profile; readonly profileVersion: string; readonly modelId: string; readonly runtimeVersion: typeof RUNTIME_VERSION;
   readonly providerPortVersion: typeof NATIVE_BAIZHI_PROVIDER_PORT_VERSION; readonly outputSchema: string;
   readonly objective: string; readonly boardRevision: number; readonly workflowRevision: number; readonly contextDigest: string;
+  readonly configuration?: FrozenRuntimeConfigurationReference; readonly instructions?: string;
   readonly entries: readonly ContextEntry[]; readonly approvedSources: readonly Readonly<ApprovedSyntheticSource>[]; readonly permissionSummary: Readonly<Record<string, boolean>>;
 }
 export interface PreparedAttempt { readonly attemptId: AttemptId; readonly invocationId: InvocationId; readonly attemptNumber: 1 | 2; readonly noSdkRetry: true; }
@@ -108,7 +111,7 @@ export interface AnalystOutput { readonly claims: readonly { readonly statement:
  * string.  No caller-owned object crosses this boundary.
  */
 export type ProviderWire = string;
-export interface ProviderPort { readonly outputContract?: InvocationBoundOutputContract; complete(request: Readonly<{ invocation: PreparedProfileInvocation; attempt: PreparedAttempt; retry: "DISABLED" }>): ProviderWire | Promise<ProviderWire>; }
+export interface ProviderPort { readonly configuration?: FrozenRuntimeConfigurationReference; readonly instructions?: string; readonly outputContract?: InvocationBoundOutputContract; complete(request: Readonly<{ invocation: PreparedProfileInvocation; attempt: PreparedAttempt; retry: "DISABLED" }>): ProviderWire | Promise<ProviderWire>; }
 export interface ResultArbitration { readonly outcome: "WINNER" | "LATE" | "STALE" | "DUPLICATE" | "DIVERGENT" | "UNKNOWN" | "INVALID"; readonly invocationId: InvocationId; readonly attemptId: AttemptId; readonly responseId: ResponseId; readonly resultId: ResultId; readonly arrivalId: ArrivalId; readonly boardRevision: number | undefined; readonly proposalBoardRevision: number | undefined; readonly materialization?: DurableGenericMaterialization; readonly reason?: never; }
 /** A rejected completion has no wire, Response, Result, or Arrival identity. */
 export interface ContractRejection { readonly outcome: "CONTRACT_REJECTED"; readonly invocationId: InvocationId; readonly attemptId: AttemptId; readonly reason: "NON_STRING" | "CHARACTER_LIMIT" | "UTF8_BYTE_LIMIT" | "NON_LOSSLESS_UTF8"; }
@@ -198,12 +201,13 @@ function persistedObjective(value: unknown, profile: Profile): string {
   return string(value, "persisted objective");
 }
 
-function makePrepared(input: { readonly approvedSources: readonly Readonly<ApprovedSyntheticSource>[]; readonly boardId: BoardId; readonly boardRevision: number; readonly caseId: CaseId; readonly entries: readonly ContextEntry[]; readonly modelId: string; readonly objective: string; readonly profile: Profile; readonly workflowRevision: number; readonly workflowRunId: WorkflowRunId; }): PreparedProfileInvocation {
+function makePrepared(input: { readonly configuration?: FrozenRuntimeConfigurationReference; readonly instructions?: string; readonly approvedSources: readonly Readonly<ApprovedSyntheticSource>[]; readonly boardId: BoardId; readonly boardRevision: number; readonly caseId: CaseId; readonly entries: readonly ContextEntry[]; readonly modelId: string; readonly objective: string; readonly profile: Profile; readonly workflowRevision: number; readonly workflowRunId: WorkflowRunId; }): PreparedProfileInvocation {
   const details = profileDetails(input.profile);
+  const configured = input.configuration === undefined ? {} : input.instructions === undefined ? { configuration: input.configuration } : { configuration: input.configuration, instructions: input.instructions };
   const contextCore = { approvedSources: input.approvedSources.map(sourceReference), boardId: input.boardId, boardRevision: input.boardRevision, caseId: input.caseId, entries: input.entries.map((entry) => ({ digest: entry.digest, id: entry.id, payload: entry.payload, type: entry.type })), modelId: input.modelId, node: details.node, objective: input.objective, outputSchema: details.outputSchema, permissionSummary: permissions, profileVersion: details.profileVersion, providerPortVersion: NATIVE_BAIZHI_PROVIDER_PORT_VERSION, runtimeVersion: RUNTIME_VERSION, workflowDefinitionId: FIXED_WORKFLOW_DEFINITION_ID, workflowDefinitionVersion: FIXED_WORKFLOW_DEFINITION, workflowRevision: input.workflowRevision, workflowRunId: input.workflowRunId };
-  const contextDigest = digest(contextCore);
+  const contextDigest = digest(input.configuration === undefined ? contextCore : { ...contextCore, configuration: input.configuration, schemaVersion: CONFIG_BOUND_PROFILE_CONTEXT_VERSION });
   const invocationId = deriveProfileInvocationId({ caseId: input.caseId, workflowRunId: input.workflowRunId, nodeId: details.node, profileVersion: details.profileVersion, contextDigest });
-  return Object.freeze({ approvedSources: input.approvedSources, boardId: input.boardId, boardRevision: input.boardRevision, caseId: input.caseId, contextDigest, contextId: deriveProfileContextId({ invocationId }), entries: Object.freeze(input.entries), invocationId, modelId: input.modelId, objective: input.objective, outputSchema: details.outputSchema, permissionSummary: permissions, profile: input.profile, profileVersion: details.profileVersion, providerPortVersion: NATIVE_BAIZHI_PROVIDER_PORT_VERSION, runtimeVersion: RUNTIME_VERSION, workflowRevision: input.workflowRevision, workflowRunId: input.workflowRunId });
+  return Object.freeze({ ...configured, approvedSources: input.approvedSources, boardId: input.boardId, boardRevision: input.boardRevision, caseId: input.caseId, contextDigest, contextId: deriveProfileContextId({ invocationId }), entries: Object.freeze(input.entries), invocationId, modelId: input.modelId, objective: input.objective, outputSchema: details.outputSchema, permissionSummary: permissions, profile: input.profile, profileVersion: details.profileVersion, providerPortVersion: NATIVE_BAIZHI_PROVIDER_PORT_VERSION, runtimeVersion: RUNTIME_VERSION, workflowRevision: input.workflowRevision, workflowRunId: input.workflowRunId });
 }
 
 /** Normalizes only public caller data; source content and identity are never accepted here. */
@@ -217,7 +221,7 @@ export function normalizeProfileInvocationRequest(value: unknown): ProfileInvoca
   return Object.freeze({ caseId: parseCaseId(request["caseId"]), modelId: string(request["modelId"], "modelId", 160), now: instant(request["now"], "now"), profile });
 }
 
-function contextFrom(database: DatabaseSync, input: unknown): PreparedProfileInvocation {
+function contextFrom(database: DatabaseSync, input: unknown, configuration?: FrozenRuntimeConfigurationReference): PreparedProfileInvocation {
   const request = normalizeProfileInvocationRequest(input);
   const rawCaseId = request.caseId; const now = request.now; const profile = request.profile;
   const modelId = request.modelId;
@@ -226,6 +230,15 @@ function contextFrom(database: DatabaseSync, input: unknown): PreparedProfileInv
   if (state === undefined) throw new Error("Case does not exist"); if (state["state"] !== details.node || state["workflow_definition_id"] !== FIXED_WORKFLOW_DEFINITION_ID || state["definition_version"] !== FIXED_WORKFLOW_DEFINITION) throw new Error("Profile cannot run outside the fixed current Workflow node"); if (state["status"] !== "OPEN") throw new Error("Profile cannot run on a terminal Case");
   const caseId = parseCaseId(state["case_id"]); if (caseId !== rawCaseId) throw new Error("persisted Case identity is invalid"); const boardId = parseBoardId(state["board_id"]); const workflowRunId = parseWorkflowRunId(state["workflow_run_id"]); const caseObjective = string(state["objective"], "objective"); const objective = profile === "RESEARCHER" ? caseObjective : ""; const boardRevision = state["board_revision"]; const workflowRevision = state["workflow_revision"];
   if (!Number.isSafeInteger(boardRevision) || !Number.isSafeInteger(workflowRevision)) throw new TypeError("persisted revisions are invalid"); const persistedBoardRevision = boardRevision as number; const persistedWorkflowRevision = workflowRevision as number;
+  const bound = configuration === undefined ? undefined : requireRuntimeConfiguration(database, configuration);
+  if (bound === undefined && inspectRunRuntimeConfiguration(database, workflowRunId) !== undefined) throw new Error("CONFIG_REFERENCE_REQUIRED");
+  if (bound !== undefined) {
+    assertRuntimeConfigurationWindow(bound.configuration, now);
+    assertRuntimeConfigurationSource(database, bound.configuration);
+    if (bound.configuration.profiles[profile].modelId !== modelId) throw new Error("CONFIG_MODEL_MISMATCH");
+    bindRunRuntimeConfiguration(database, workflowRunId, caseId, bound.reference, now);
+  }
+  const configured = bound === undefined ? {} : { configuration: bound.reference, instructions: bound.configuration.profiles[profile].instructions };
   const entries = profile === "RESEARCHER"
     ? rows(database, `SELECT entry.board_entry_id, entry.entry_type, entry.payload_json, entry.content_digest, receipt.receipt_id AS receipt_id, receipt.source_message_id AS source_message_id
         FROM board_entries entry
@@ -249,9 +262,10 @@ function contextFrom(database: DatabaseSync, input: unknown): PreparedProfileInv
           WHERE case_id = ? AND created_revision <= ? AND status IN ('CANDIDATE', 'ACCEPTED') AND visibility = 'CASE' AND instruction_authority = 'NONE'
           ORDER BY created_revision, board_entry_id`, caseId, persistedBoardRevision).map(parseEntry);
   const approvedSources = profile === "RESEARCHER" ? resolveApprovedSources(database) : Object.freeze([]);
-  const prepared = makePrepared({ approvedSources, boardId, boardRevision: persistedBoardRevision, caseId, entries, modelId, objective, profile, workflowRevision: persistedWorkflowRevision, workflowRunId });
+  const prepared = makePrepared({ ...configured, approvedSources, boardId, boardRevision: persistedBoardRevision, caseId, entries, modelId, objective, profile, workflowRevision: persistedWorkflowRevision, workflowRunId });
   const fixedContext = profile === "REVIEWER" || profile === "WRITER" ? {
     invocationId: prepared.invocationId, caseId, workflowRunId: prepared.workflowRunId, boardId, nodeId: profile,
+    ...(bound === undefined ? {} : { configuration: bound.reference }),
     workflowDefinitionId: FIXED_WORKFLOW_DEFINITION_ID, workflowDefinitionVersion: FIXED_WORKFLOW_DEFINITION,
     profileVersion: prepared.profileVersion, providerPortVersion: NATIVE_BAIZHI_PROVIDER_PORT_VERSION, modelId: prepared.modelId, runtimeVersion: RUNTIME_VERSION, outputSchema: prepared.outputSchema, objective,
     selectedEntriesJson: json(prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id, type: entry.type }))), approvedSourcesJson: json(approvedSources), permissionSummaryJson: json(permissions), contextDigest: prepared.contextDigest, createdAt: now,
@@ -260,7 +274,12 @@ function contextFrom(database: DatabaseSync, input: unknown): PreparedProfileInv
     const existing = one(database, "SELECT invocation_id, model_id, context_digest FROM runtime_invocations WHERE invocation_id = ?", prepared.invocationId);
     if (existing !== undefined) { if (existing["model_id"] !== prepared.modelId || existing["context_digest"] !== prepared.contextDigest) throw new Error("logical Invocation identity conflicts with immutable context"); if (fixedContext !== undefined) persistFixedProfileContext(database, fixedContext); return; }
     database.prepare(`INSERT INTO runtime_invocations (invocation_id, schema_version, case_id, workflow_run_id, board_id, node_id, profile_version, model_id, workflow_revision, board_revision, context_digest, status, attempt_budget, created_at) VALUES (?, 'accord.runtime-invocation/v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'READY', 2, ?)`).run(prepared.invocationId, caseId, prepared.workflowRunId, boardId, details.node, details.profileVersion, prepared.modelId, persistedWorkflowRevision, persistedBoardRevision, prepared.contextDigest, now);
-    if (fixedContext === undefined) database.prepare(`INSERT INTO profile_contexts (context_id, schema_version, invocation_id, case_id, workflow_run_id, board_id, node_id, workflow_definition_id, workflow_definition_version, profile_version, provider_port_version, model_id, runtime_version, output_schema, objective, selected_entries_json, approved_sources_json, permission_summary_json, context_digest, created_at) VALUES (?, 'accord.profile-context/v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(prepared.contextId, prepared.invocationId, caseId, prepared.workflowRunId, boardId, details.node, FIXED_WORKFLOW_DEFINITION_ID, FIXED_WORKFLOW_DEFINITION, prepared.profileVersion, NATIVE_BAIZHI_PROVIDER_PORT_VERSION, prepared.modelId, RUNTIME_VERSION, prepared.outputSchema, objective, json(prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id, type: entry.type }))), json(approvedSources), json(permissions), prepared.contextDigest, now);
+    if (bound !== undefined && rows(database, "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='invocation_runtime_configurations'").length === 1) database.prepare("INSERT INTO invocation_runtime_configurations (invocation_id, workflow_run_id, case_id, configuration_id, configuration_revision, config_digest, bound_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(prepared.invocationId, workflowRunId, caseId, bound.reference.configurationId, bound.reference.revision, bound.reference.digest, now);
+    if (fixedContext === undefined) {
+      const hasConfigColumns = rows(database, "PRAGMA table_info(profile_contexts)").some((column) => column["name"] === "configuration_id");
+      if (hasConfigColumns) database.prepare(`INSERT INTO profile_contexts (context_id, schema_version, invocation_id, case_id, workflow_run_id, board_id, node_id, workflow_definition_id, workflow_definition_version, profile_version, provider_port_version, model_id, runtime_version, output_schema, objective, selected_entries_json, approved_sources_json, permission_summary_json, context_digest, created_at, configuration_id, configuration_revision, config_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(prepared.contextId, bound === undefined ? "accord.profile-context/v1" : CONFIG_BOUND_PROFILE_CONTEXT_VERSION, prepared.invocationId, caseId, prepared.workflowRunId, boardId, details.node, FIXED_WORKFLOW_DEFINITION_ID, FIXED_WORKFLOW_DEFINITION, prepared.profileVersion, NATIVE_BAIZHI_PROVIDER_PORT_VERSION, prepared.modelId, RUNTIME_VERSION, prepared.outputSchema, objective, json(prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id, type: entry.type }))), json(approvedSources), json(permissions), prepared.contextDigest, now, bound?.reference.configurationId ?? null, bound?.reference.revision ?? null, bound?.reference.digest ?? null);
+      else database.prepare(`INSERT INTO profile_contexts (context_id, schema_version, invocation_id, case_id, workflow_run_id, board_id, node_id, workflow_definition_id, workflow_definition_version, profile_version, provider_port_version, model_id, runtime_version, output_schema, objective, selected_entries_json, approved_sources_json, permission_summary_json, context_digest, created_at) VALUES (?, 'accord.profile-context/v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(prepared.contextId, prepared.invocationId, caseId, prepared.workflowRunId, boardId, details.node, FIXED_WORKFLOW_DEFINITION_ID, FIXED_WORKFLOW_DEFINITION, prepared.profileVersion, NATIVE_BAIZHI_PROVIDER_PORT_VERSION, prepared.modelId, RUNTIME_VERSION, prepared.outputSchema, objective, json(prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id, type: entry.type }))), json(approvedSources), json(permissions), prepared.contextDigest, now);
+    }
     else persistFixedProfileContext(database, fixedContext);
     database.prepare(`INSERT INTO runtime_attempts (attempt_id, schema_version, invocation_id, attempt_number, state, no_sdk_retry, created_at) VALUES (?, 'accord.runtime-attempt/v1', ?, 1, 'READY', 1, ?)`).run(deriveRuntimeAttemptId({ invocationId: prepared.invocationId, attemptNumber: 1 }), prepared.invocationId, now);
   });
@@ -268,6 +287,14 @@ function contextFrom(database: DatabaseSync, input: unknown): PreparedProfileInv
 }
 /** Parses an exact public request before any Attempt claim or provider I/O. */
 export function prepareProfileInvocation(database: DatabaseSync, input: ProfileInvocationRequest): PreparedProfileInvocation { return contextFrom(database, input); }
+
+export function prepareConfiguredProfileInvocation(database: DatabaseSync, input: ConfiguredProfileInvocationRequest): PreparedProfileInvocation {
+  const request = record(input, "configured Invocation request"); exact(request, ["caseId", "profile", "configuration", "now"], "configured Invocation request");
+  const accepted = requireRuntimeConfiguration(database, request["configuration"]);
+  const profile = request["profile"];
+  if (profile !== "RESEARCHER" && profile !== "ANALYST" && profile !== "REVIEWER" && profile !== "WRITER") throw new Error("CONFIG_PROFILE_INVALID");
+  return transaction(database, () => contextFrom(database, { caseId: request["caseId"], profile, modelId: accepted.configuration.profiles[profile].modelId, now: request["now"] }, accepted.reference));
+}
 
 function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown): PreparedProfileInvocation {
   const invocationId = parseInvocationId(suppliedInvocationId);
@@ -280,9 +307,14 @@ function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown
   const workflowRunId = parseWorkflowRunId(context["workflow_run_id"]);
   const modelId = string(context["model_id"], "persisted modelId", 160);
   const objective = persistedObjective(context["objective"], profile);
+  const bound = inspectInvocationRuntimeConfiguration(database, invocationId);
+  if (bound !== undefined) {
+    assertRuntimeConfigurationSource(database, bound.configuration);
+    if (bound.configuration.profiles[profile].modelId !== modelId) throw new Error("CONFIG_MODEL_MISMATCH");
+  }
   const caseRow = one(database, "SELECT objective FROM cases WHERE case_id = ?", caseId);
   if (
-    context["schema_version"] !== "accord.profile-context/v1" ||
+    context["schema_version"] !== (bound === undefined ? "accord.profile-context/v1" : CONFIG_BOUND_PROFILE_CONTEXT_VERSION) ||
     context["invocation_id"] !== invocationId ||
     context["workflow_definition_id"] !== FIXED_WORKFLOW_DEFINITION_ID ||
     context["workflow_definition_version"] !== FIXED_WORKFLOW_DEFINITION ||
@@ -339,7 +371,7 @@ function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown
   }
   const permissionSummary = parseJson(context["permission_summary_json"], "persisted permission summary");
   if (context["permission_summary_json"] !== json(permissions) || json(permissionSummary) !== json(permissions)) throw new Error("persisted permission summary is not the exact deny-all contract");
-  const prepared = makePrepared({ approvedSources, boardId, boardRevision: boardRevision as number, caseId, entries, modelId, objective, profile, workflowRevision: workflowRevision as number, workflowRunId });
+  const prepared = makePrepared({ ...(bound === undefined ? {} : { configuration: bound.reference, instructions: bound.configuration.profiles[profile].instructions }), approvedSources, boardId, boardRevision: boardRevision as number, caseId, entries, modelId, objective, profile, workflowRevision: workflowRevision as number, workflowRunId });
   if (prepared.contextId !== context["context_id"] || prepared.contextDigest !== hexDigest(context["context_digest"], "persisted context digest") || prepared.invocationId !== invocationId) throw new Error("persisted Invocation context is invalid");
   if (invocation["case_id"] !== prepared.caseId || invocation["workflow_run_id"] !== prepared.workflowRunId || invocation["board_id"] !== prepared.boardId || invocation["node_id"] !== prepared.profile || invocation["profile_version"] !== prepared.profileVersion || invocation["model_id"] !== prepared.modelId || invocation["workflow_revision"] !== prepared.workflowRevision || invocation["board_revision"] !== prepared.boardRevision || invocation["context_digest"] !== prepared.contextDigest) throw new Error("persisted Invocation identity tuple is inconsistent");
   return prepared;
@@ -420,6 +452,7 @@ function validateInvocationAttemptStatePair(status: unknown, attempts: readonly 
 }
 
 export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): void {
+  validatePersistedRuntimeConfigurations(database);
   validateLegacyProviderDeliveryProvenance(database);
   const genericResolutionAuditIds = new Set<string>();
   const validateGenericResolutionCarrier = (prepared: PreparedProfileInvocation, attemptId: AttemptId, deliveryNumber: number, wireDigestValue: string, recordedAt: string): GenericOutputResolution => {
@@ -686,6 +719,7 @@ function validateLegacyProviderDeliveryProvenance(database: DatabaseSync): void 
 
 function assertSuppliedIdentity(supplied: PreparedProfileInvocation, prepared: PreparedProfileInvocation): void {
   const fields: readonly (keyof PreparedProfileInvocation)[] = ["boardId", "boardRevision", "caseId", "contextDigest", "contextId", "invocationId", "modelId", "objective", "outputSchema", "profile", "profileVersion", "providerPortVersion", "runtimeVersion", "workflowRevision", "workflowRunId"];
+  if (json(supplied.configuration) !== json(prepared.configuration) || supplied.instructions !== prepared.instructions) throw new Error("CONFIG_MISMATCH");
   if (fields.some((field) => supplied[field] !== prepared[field]) || json(supplied.entries) !== json(prepared.entries) || json(supplied.approvedSources) !== json(prepared.approvedSources) || json(supplied.permissionSummary) !== json(permissions)) throw new Error("provider result identity does not match its persisted Invocation");
 }
 
@@ -699,10 +733,16 @@ function failInvocationIfExhausted(database: DatabaseSync, invocation: PreparedP
   database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at) VALUES (?, 'accord.audit-event/v1', ?, 'RUNTIME_ATTEMPTS_EXHAUSTED', ?, ?, ?, NULL, ?, ?)`).run(deriveRuntimeAuditEventId("runtime-exhausted", [runtimeInvocationId]), deriveRuntimeAuditCorrelationId(runtimeInvocationId), invocation.caseId, invocation.boardId, invocation.workflowRunId, json({ attemptBudget: 2, invocationId: invocation.invocationId, operatorDecisionRequired: true }), at);
 }
 
-export function beginPreparedAttempt(database: DatabaseSync, invocationId: InvocationId, now: string): PreparedAttempt {
+export function beginPreparedAttempt(database: DatabaseSync, invocationId: InvocationId, now: string, configuration?: FrozenRuntimeConfigurationReference): PreparedAttempt {
   const prepared = canonicalPrepared(database, invocationId);
   const validInvocationId = parseInvocationId(prepared.invocationId);
   const startedAt = instant(now, "now");
+  if (prepared.configuration !== undefined) {
+    if (configuration === undefined) throw new Error("CONFIG_REFERENCE_REQUIRED");
+    const bound = requireRuntimeConfiguration(database, configuration);
+    if (json(bound.reference) !== json(prepared.configuration)) throw new Error("CONFIG_MISMATCH");
+    assertRuntimeConfigurationWindow(bound.configuration, startedAt);
+  } else if (configuration !== undefined) throw new Error("LEGACY_INVOCATION_UNBOUND");
   const claimed = transaction(database, () => {
     const invocation = one(database, "SELECT status FROM runtime_invocations WHERE invocation_id = ?", validInvocationId);
     if (invocation === undefined) throw new Error("unknown Invocation");
@@ -1657,14 +1697,31 @@ function awaitProviderWireCompletion(value: unknown): Promise<Readonly<{ value: 
     Promise.prototype.then.call(value, (resolved: unknown) => resolve(Object.freeze({ value: resolved })), reject);
   });
 }
-export async function executePreparedAttempt(database: DatabaseSync, supplied: PreparedProfileInvocation, port: ProviderPort, now: string): Promise<ProviderResultArbitration> {
+export async function executePreparedAttempt(database: DatabaseSync, supplied: PreparedProfileInvocation, port: ProviderPort, now: string, configuration?: FrozenRuntimeConfigurationReference): Promise<ProviderResultArbitration> {
   const prepared = canonicalPrepared(database, supplied.invocationId); assertSuppliedIdentity(supplied, prepared);
+  if (prepared.configuration !== undefined) {
+    const suppliedConfiguration = configuration ?? port.configuration;
+    if (suppliedConfiguration === undefined || json(port.configuration) !== json(prepared.configuration) || json(suppliedConfiguration) !== json(prepared.configuration) || port.instructions !== prepared.instructions) throw new Error("CONFIG_PORT_MISMATCH");
+  } else if (configuration !== undefined || port.configuration !== undefined || port.instructions !== undefined) throw new Error("LEGACY_INVOCATION_UNBOUND");
   const suppliedOutputContract = prepared.profile === "REVIEWER" || prepared.profile === "WRITER" ? port.outputContract : undefined;
   const outputContract = suppliedOutputContract === undefined ? undefined : Object.freeze({ invocationId: suppliedOutputContract.invocationId, contextDigest: suppliedOutputContract.contextDigest, profile: suppliedOutputContract.profile, profileVersion: suppliedOutputContract.profileVersion, outputSchema: suppliedOutputContract.outputSchema, materialize: suppliedOutputContract.materialize });
   if (prepared.profile === "REVIEWER" || prepared.profile === "WRITER") assertInvocationBoundOutputContract(prepared, outputContract);
-  const attempt = beginPreparedAttempt(database, prepared.invocationId, now);
+  const attempt = beginPreparedAttempt(database, prepared.invocationId, now, prepared.configuration === undefined ? undefined : prepared.configuration);
   let response: unknown;
   try { const completion = port.complete(Object.freeze({ attempt, invocation: prepared, retry: "DISABLED" })); response = (await awaitProviderWireCompletion(completion)).value; }
   catch (error) { transaction(database, () => { const at = instant(now, "now"); database.prepare("UPDATE runtime_attempts SET state = 'UNKNOWN', finished_at = ? WHERE attempt_id = ? AND state = 'RUNNING'").run(at, attempt.attemptId); database.prepare("UPDATE runtime_invocations SET status = 'UNKNOWN' WHERE invocation_id = ? AND status = 'RUNNING'").run(prepared.invocationId); recordUnknownRuntimeArrival(database, { invocationId: prepared.invocationId, attemptId: attempt.attemptId, caseId: prepared.caseId, boardId: prepared.boardId, workflowRunId: prepared.workflowRunId, recordedAt: at, eventKind: `RUNTIME_PROVIDER_EXCEPTION_UNKNOWN:${attempt.attemptId}`, details: {} }); failInvocationIfExhausted(database, prepared, at); }); throw error; }
   return commitProviderResult(database, prepared, attempt, response as ProviderWire, undefined, outputContract);
+}
+
+export function preflightConfiguredInvocation(database: DatabaseSync, invocation: PreparedProfileInvocation, reference: FrozenRuntimeConfigurationReference, configuration: FrozenRuntimeConfiguration, now: string) {
+  const prepared = canonicalPrepared(database, invocation.invocationId); assertSuppliedIdentity(invocation, prepared);
+  if (prepared.configuration === undefined) throw new Error("LEGACY_INVOCATION_UNBOUND");
+  const accepted = preflightRuntimeConfiguration(database, reference, configuration, now);
+  if (json(accepted.reference) !== json(prepared.configuration)) throw new Error("CONFIG_MISMATCH");
+  return accepted;
+}
+
+export async function executeConfiguredPreparedAttempt(database: DatabaseSync, invocation: PreparedProfileInvocation, reference: FrozenRuntimeConfigurationReference, configuration: FrozenRuntimeConfiguration, port: ProviderPort, now: string): Promise<ProviderResultArbitration> {
+  preflightConfiguredInvocation(database, invocation, reference, configuration, now);
+  return executePreparedAttempt(database, invocation, port, now, reference);
 }

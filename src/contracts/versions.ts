@@ -3,7 +3,7 @@ export const NORMALIZED_INTAKE_CONTRACT = "accord.normalized-synthetic-intake/v1
 export const CORE_DATABASE_SCHEMA_VERSION = 1 as const;
 /** The generated Researcher/Analyst artifact is a frozen schema-8 handoff. */
 export const RESEARCHER_ANALYST_HANDOFF_SCHEMA_VERSION = 8 as const;
-export const DATABASE_SCHEMA_VERSION = 11 as const;
+export const DATABASE_SCHEMA_VERSION = 12 as const;
 export const MIGRATION_ID = "001_r003_authority_core" as const;
 export const MIGRATION_FILE = "migrations/001_r003_authority_core.sql" as const;
 export const MAGICCHAT_INGRESS_MIGRATION_ID = "002_r003_magicchat_ingress" as const;
@@ -32,6 +32,10 @@ export const APPROVAL_PUBLICATION_MIGRATION_ID = "011_r003_approval_publication"
 export const APPROVAL_PUBLICATION_MIGRATION_FILE = "migrations/011_r003_approval_publication.sql" as const;
 export const APPROVAL_PUBLICATION_MIGRATION_SHA256 = "571a457be5caa191516228613d91807d86757dae66b24ce5db374385682ed6f3" as const;
 export const APPROVAL_PUBLICATION_SCHEMA_FINGERPRINT = "61ee78bc324397d880158910a563a2694a737d48c7cd285139d8eb59fa9a90b6" as const;
+export const FROZEN_RUNTIME_CONFIG_MIGRATION_ID = "012_r003_frozen_runtime_config" as const;
+export const FROZEN_RUNTIME_CONFIG_MIGRATION_FILE = "migrations/012_r003_frozen_runtime_config.sql" as const;
+export const FROZEN_RUNTIME_CONFIG_MIGRATION_SHA256 = "10cadf12104ada8862e0bdb2c8e1cef26aea9dedb7c5b845661712da2f581a69" as const;
+export const FROZEN_RUNTIME_CONFIG_SCHEMA_FINGERPRINT = "3d7aef0881aa3c420b2b1ce4cfc660c67f2ab215214c350ac738bd05f549fa6e" as const;
 export const FIXED_WORKFLOW_DEFINITION = "r003-fixed/v1" as const;
 export const FIXED_WORKFLOW_DEFINITION_ID = "workflow_definition_r003_fixed_v1" as const;
 
@@ -58,6 +62,9 @@ export const CONTRACT_VERSIONS = Object.freeze({
   magicChatMessage: "accord.magicchat-message/v1",
   magicChatRpcAction: "accord.magicchat-rpc-action/v1",
   waitChallenge: "accord.wait-challenge/v1",
+  frozenRuntimeConfiguration: "accord.frozen-runtime-config/v1",
+  invocationRuntimeConfiguration: "accord.invocation-runtime-config/v1",
+  runRuntimeConfiguration: "accord.run-runtime-config/v1",
   profileContext: "accord.profile-context/v1",
   runtimeAttempt: "accord.runtime-attempt/v1",
   runtimeResult: "accord.runtime-result/v1",
@@ -68,6 +75,10 @@ export const CONTRACT_VERSIONS = Object.freeze({
   runtimeOpaqueCompletionReceipt: "accord.runtime-opaque-completion-receipt/v1",
   approvedSyntheticSource: "accord.approved-synthetic-source/v1",
 } as const);
+
+export const F1_TRANSACTION_AUTHORITY_TABLES = Object.freeze([
+  "runtime_configurations", "run_runtime_configurations", "invocation_runtime_configurations",
+] as const);
 
 export const CORE_TRANSACTION_AUTHORITY_TABLES = Object.freeze([
   "cases",
@@ -85,6 +96,7 @@ export const CORE_TRANSACTION_AUTHORITY_TABLES = Object.freeze([
 
 export const TRANSACTION_AUTHORITY_TABLES = Object.freeze([
   ...CORE_TRANSACTION_AUTHORITY_TABLES,
+  ...F1_TRANSACTION_AUTHORITY_TABLES,
   "magicchat_inbox_states",
   "wait_challenges",
   "magicchat_rpc_actions",

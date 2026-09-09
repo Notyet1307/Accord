@@ -43,6 +43,7 @@ export interface FixedProfileContextInput {
   readonly permissionSummaryJson: string;
   readonly contextDigest: string;
   readonly createdAt: string;
+  readonly configuration?: Readonly<{ configurationId: string; revision: number; digest: string }>;
 }
 
 export interface PersistedFixedProfileContext extends FixedProfileContextInput {
@@ -113,14 +114,17 @@ function recomputeContextDigest(database: DatabaseSync, input: FixedProfileConte
   const approvedSources = JSON.parse(input.approvedSourcesJson) as unknown;
   const permissionSummary = JSON.parse(input.permissionSummaryJson) as unknown;
   const core = { approvedSources, boardId: input.boardId, boardRevision, caseId: input.caseId, entries, modelId: input.modelId, node: input.nodeId, objective: input.objective, outputSchema: input.outputSchema, permissionSummary, profileVersion: input.profileVersion, providerPortVersion: input.providerPortVersion, runtimeVersion: input.runtimeVersion, workflowDefinitionId: input.workflowDefinitionId, workflowDefinitionVersion: input.workflowDefinitionVersion, workflowRevision, workflowRunId: input.workflowRunId };
-  return createHash("sha256").update(JSON.stringify(canonical(core)), "utf8").digest("hex");
+  const value = input.configuration === undefined ? core : { ...core, configuration: input.configuration, schemaVersion: "accord.profile-context/config-bound-v2" };
+  return createHash("sha256").update(JSON.stringify(canonical(value)), "utf8").digest("hex");
 }
 
 function sameRow(row: Record<string, unknown>, input: FixedProfileContextInput, contextId: ContextId): boolean {
+  const configured = input.configuration;
   const expected: Record<string, unknown> = {
-    context_id: contextId, schema_version: "accord.profile-context/v1", invocation_id: input.invocationId, case_id: input.caseId, workflow_run_id: input.workflowRunId, board_id: input.boardId, node_id: input.nodeId,
+    context_id: contextId, schema_version: configured === undefined ? "accord.profile-context/v1" : "accord.profile-context/config-bound-v2", invocation_id: input.invocationId, case_id: input.caseId, workflow_run_id: input.workflowRunId, board_id: input.boardId, node_id: input.nodeId,
     workflow_definition_id: input.workflowDefinitionId, workflow_definition_version: input.workflowDefinitionVersion, profile_version: input.profileVersion, provider_port_version: input.providerPortVersion, model_id: input.modelId, runtime_version: input.runtimeVersion, output_schema: input.outputSchema, objective: input.objective,
     selected_entries_json: input.selectedEntriesJson, approved_sources_json: input.approvedSourcesJson, permission_summary_json: input.permissionSummaryJson, context_digest: input.contextDigest, created_at: input.createdAt,
+    configuration_id: configured?.configurationId ?? null, configuration_revision: configured?.revision ?? null, config_digest: configured?.digest ?? null,
   };
   return Object.keys(expected).every((key) => row[key] === expected[key]);
 }
@@ -138,12 +142,18 @@ function persistFixedProfileContextInternal(database: DatabaseSync, input: Fixed
     const approvedSourcesJson = parseJson(input.approvedSourcesJson, "array", "approvedSourcesJson"); const permissionSummaryJson = parseJson(input.permissionSummaryJson, "object", "permissionSummaryJson"); const contextDigest = hexDigest(input.contextDigest); const createdAt = instant(input.createdAt, "createdAt");
     const invocation = database.prepare(`SELECT i.case_id, i.workflow_run_id, i.board_id, i.node_id, i.profile_version, i.workflow_revision, i.board_revision, i.context_digest, b.revision AS current_board_revision, w.revision AS current_workflow_revision, w.state, c.status, d.definition_version FROM runtime_invocations i JOIN cases c ON c.case_id = i.case_id JOIN boards b ON b.board_id = i.board_id AND b.case_id = i.case_id JOIN workflow_runs w ON w.workflow_run_id = i.workflow_run_id AND w.case_id = i.case_id JOIN workflow_definitions d ON d.workflow_definition_id = w.workflow_definition_id WHERE i.invocation_id = ?`).get(invocationId) as Record<string, unknown> | undefined;
     if (invocation === undefined || invocation["case_id"] !== caseId || invocation["workflow_run_id"] !== workflowRunId || invocation["board_id"] !== boardId || invocation["node_id"] !== input.nodeId || invocation["profile_version"] !== input.profileVersion || invocation["context_digest"] !== contextDigest || invocation["definition_version"] !== WORKFLOW_DEFINITION_VERSION || !Number.isSafeInteger(invocation["workflow_revision"]) || !Number.isSafeInteger(invocation["board_revision"]) || (!allowHistorical && (invocation["state"] !== input.nodeId || invocation["status"] !== "OPEN" || invocation["workflow_revision"] !== invocation["current_workflow_revision"] || invocation["board_revision"] !== invocation["current_board_revision"]))) throw new Error("Profile Context is not exactly bound to its Invocation graph");
+    const configured = input.configuration;
+    if (configured !== undefined && (!/^[A-Za-z][A-Za-z0-9._-]*$/u.test(configured.configurationId) || !Number.isSafeInteger(configured.revision) || configured.revision < 1 || !/^[0-9a-f]{64}$/u.test(configured.digest))) throw new TypeError("configuration reference is invalid");
+    if (configured !== undefined) {
+      const binding = database.prepare("SELECT configuration_id, configuration_revision, config_digest FROM invocation_runtime_configurations WHERE invocation_id = ?").get(invocationId) as Record<string, unknown> | undefined;
+      if (binding === undefined || binding["configuration_id"] !== configured.configurationId || binding["configuration_revision"] !== configured.revision || binding["config_digest"] !== configured.digest) throw new Error("Profile Context configuration binding is invalid");
+    }
     const selectedEntriesJson = selectedEntries(database, parseJson(input.selectedEntriesJson, "array", "selectedEntriesJson"), caseId, boardId, invocation["board_revision"] as number);
     if (recomputeContextDigest(database, { ...input, caseId, workflowRunId, boardId, invocationId, approvedSourcesJson, permissionSummaryJson }, selectedEntriesJson, invocation["board_revision"] as number, invocation["workflow_revision"] as number) !== contextDigest) throw new Error("Profile Context digest does not match its immutable graph");
     const normalized = { ...input, invocationId, caseId, workflowRunId, boardId, contextId, selectedEntriesJson, approvedSourcesJson, permissionSummaryJson, contextDigest, createdAt };
     const old = existing(database, invocationId);
     if (old !== undefined) { if (!sameRow(old, normalized, contextId)) throw new Error("Profile Context identity conflicts with immutable persisted context"); }
-    else database.prepare(`INSERT INTO profile_contexts (context_id, schema_version, invocation_id, case_id, workflow_run_id, board_id, node_id, workflow_definition_id, workflow_definition_version, profile_version, provider_port_version, model_id, runtime_version, output_schema, objective, selected_entries_json, approved_sources_json, permission_summary_json, context_digest, created_at) VALUES (?, 'accord.profile-context/v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(contextId, invocationId, caseId, workflowRunId, boardId, input.nodeId, input.workflowDefinitionId, input.workflowDefinitionVersion, input.profileVersion, input.providerPortVersion, input.modelId, input.runtimeVersion, input.outputSchema, input.objective, selectedEntriesJson, approvedSourcesJson, permissionSummaryJson, contextDigest, createdAt);
+    else database.prepare(`INSERT INTO profile_contexts (context_id, schema_version, invocation_id, case_id, workflow_run_id, board_id, node_id, workflow_definition_id, workflow_definition_version, profile_version, provider_port_version, model_id, runtime_version, output_schema, objective, selected_entries_json, approved_sources_json, permission_summary_json, context_digest, created_at, configuration_id, configuration_revision, config_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(contextId, configured === undefined ? "accord.profile-context/v1" : "accord.profile-context/config-bound-v2", invocationId, caseId, workflowRunId, boardId, input.nodeId, input.workflowDefinitionId, input.workflowDefinitionVersion, input.profileVersion, input.providerPortVersion, input.modelId, input.runtimeVersion, input.outputSchema, input.objective, selectedEntriesJson, approvedSourcesJson, permissionSummaryJson, contextDigest, createdAt, configured?.configurationId ?? null, configured?.revision ?? null, configured?.digest ?? null);
     const result = Object.freeze({ ...normalized, boardRevision: invocation["board_revision"] as number, workflowRevision: invocation["workflow_revision"] as number });
     database.exec(nested ? `RELEASE ${savepoint}` : "COMMIT");
     return result;
@@ -156,8 +166,9 @@ export function readFixedProfileContext(database: DatabaseSync, invocationId: In
   const row = existing(database, parseInvocationId(invocationId));
   if (row === undefined) return undefined;
   if (row["node_id"] !== "REVIEWER" && row["node_id"] !== "WRITER") throw new Error("Researcher/Analyst Context is outside the fixed C01 seam");
+  const configuration = row["configuration_id"] === null ? undefined : { configurationId: String(row["configuration_id"]), revision: Number(row["configuration_revision"]), digest: String(row["config_digest"]) };
   const input: FixedProfileContextInput = {
-    invocationId: parseInvocationId(row["invocation_id"]), caseId: parseCaseId(row["case_id"]), workflowRunId: parseWorkflowRunId(row["workflow_run_id"]), boardId: parseBoardId(row["board_id"]), nodeId: row["node_id"], workflowDefinitionId: String(row["workflow_definition_id"]), workflowDefinitionVersion: String(row["workflow_definition_version"]), profileVersion: String(row["profile_version"]), providerPortVersion: String(row["provider_port_version"]), modelId: String(row["model_id"]), runtimeVersion: String(row["runtime_version"]), outputSchema: String(row["output_schema"]), objective: String(row["objective"]), selectedEntriesJson: String(row["selected_entries_json"]), approvedSourcesJson: String(row["approved_sources_json"]), permissionSummaryJson: String(row["permission_summary_json"]), contextDigest: hexDigest(String(row["context_digest"])), createdAt: instant(String(row["created_at"]), "createdAt"),
+    invocationId: parseInvocationId(row["invocation_id"]), caseId: parseCaseId(row["case_id"]), workflowRunId: parseWorkflowRunId(row["workflow_run_id"]), boardId: parseBoardId(row["board_id"]), nodeId: row["node_id"], workflowDefinitionId: String(row["workflow_definition_id"]), workflowDefinitionVersion: String(row["workflow_definition_version"]), profileVersion: String(row["profile_version"]), providerPortVersion: String(row["provider_port_version"]), modelId: String(row["model_id"]), runtimeVersion: String(row["runtime_version"]), outputSchema: String(row["output_schema"]), objective: String(row["objective"]), selectedEntriesJson: String(row["selected_entries_json"]), approvedSourcesJson: String(row["approved_sources_json"]), permissionSummaryJson: String(row["permission_summary_json"]), contextDigest: hexDigest(String(row["context_digest"])), createdAt: instant(String(row["created_at"]), "createdAt"), ...(configuration === undefined ? {} : { configuration }),
   };
   return persistFixedProfileContextInternal(database, input, true);
 }

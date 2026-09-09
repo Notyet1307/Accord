@@ -64,6 +64,7 @@ export {
   type PreparedProfileInvocation,
   type Profile,
   type ProfileInvocationRequest,
+  type ConfiguredProfileInvocationRequest,
   type ProviderPort,
   type ProviderWire,
   type ResearcherOutput,
@@ -71,6 +72,12 @@ export {
   type ProviderResultArbitration,
   type ResultArbitration,
 } from "./researcher-analyst.js";
+export {
+  FROZEN_RUNTIME_CONFIG_VERSION, CONFIG_BOUND_PROFILE_CONTEXT_VERSION, FROZEN_RUNTIME_CONFIG_MAX_BYTES, FROZEN_RUNTIME_POLICY,
+  acceptRuntimeConfiguration, inspectRuntimeConfiguration, normalizeFrozenRuntimeConfiguration, parseFrozenRuntimeConfiguration, runtimeConfigurationDigest,
+  type FrozenRuntimeConfiguration, type FrozenRuntimeConfigurationReference, type AcceptedFrozenRuntimeConfiguration,
+} from "./frozen-runtime-config.js";
+export { prepareConfiguredProfileInvocation, executeConfiguredPreparedAttempt, preflightConfiguredInvocation } from "./researcher-analyst.js";
 export {
   MAGICCHAT_APP_WEBSOCKET_CONTRACT,
   MAGICCHAT_SOURCE_COMMIT,
