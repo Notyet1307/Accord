@@ -23,8 +23,8 @@ export interface FrozenProfileConfiguration {
 export interface FrozenRuntimeConfiguration {
   readonly schemaVersion: typeof FROZEN_RUNTIME_CONFIG_VERSION;
   readonly configurationId: string; readonly revision: number;
-  readonly magicChat: Readonly<{ endpoint: string; appId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.magicchat-websocket-transport/v1" }>;
-  readonly provider: Readonly<{ endpoint: string; deploymentId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.baizhi-responses-transport/v1" }>;
+  readonly magicChat: Readonly<{ endpoint: string; appId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.magicchat-websocket-transport/v1" | "accord.magicchat-websocket-transport/v2" }>;
+  readonly provider: Readonly<{ endpoint: string; deploymentId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.baizhi-responses-transport/v1" | "accord.baizhi-responses-transport/v2" }>;
   readonly profiles: Readonly<Record<FrozenProfile, FrozenProfileConfiguration>>;
   readonly policy: Omit<typeof FROZEN_RUNTIME_POLICY, "targetVersion"> & Readonly<{ targetVersion: typeof FROZEN_RUNTIME_POLICY.targetVersion | typeof REVIEWER_TARGET_POLICY_VERSION }>;
   readonly sourceManifestDigest: string;
@@ -87,7 +87,7 @@ export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRunti
   if (config["costLimitCny"] !== null) fail("COST_LIMIT_NOT_IMPLEMENTED");
   const magic = object(config["magicChat"]); exact(magic, ["endpoint", "appId", "credentialRef", "authenticationIdentityRevision", "transportVersion"]);
   const provider = object(config["provider"]); exact(provider, ["endpoint", "deploymentId", "credentialRef", "authenticationIdentityRevision", "transportVersion"]);
-  if (magic["transportVersion"] !== "accord.magicchat-websocket-transport/v1" || provider["transportVersion"] !== "accord.baizhi-responses-transport/v1") fail("CONFIG_VERSION_UNSUPPORTED");
+  if (!(["accord.magicchat-websocket-transport/v1", "accord.magicchat-websocket-transport/v2"] as unknown[]).includes(magic["transportVersion"]) || !(["accord.baizhi-responses-transport/v1", "accord.baizhi-responses-transport/v2"] as unknown[]).includes(provider["transportVersion"])) fail("CONFIG_VERSION_UNSUPPORTED");
   const appId = text(magic["appId"]);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(appId)) fail();
   const rawProfiles = object(config["profiles"]); const names = ["RESEARCHER", "ANALYST", "REVIEWER", "WRITER"] as const; exact(rawProfiles, names);
@@ -111,8 +111,8 @@ export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRunti
   const notBefore = instant(window["notBefore"]); const deadline = instant(window["deadline"]); if (notBefore >= deadline) fail();
   const normalized: FrozenRuntimeConfiguration = Object.freeze({
     schemaVersion: FROZEN_RUNTIME_CONFIG_VERSION, configurationId: identifier(config["configurationId"]), revision: positive(config["revision"]),
-    magicChat: Object.freeze({ endpoint: endpoint(magic["endpoint"], "magicChat"), appId, credentialRef: credentialReference(magic["credentialRef"]), authenticationIdentityRevision: positive(magic["authenticationIdentityRevision"]), transportVersion: "accord.magicchat-websocket-transport/v1" as const }),
-    provider: Object.freeze({ endpoint: endpoint(provider["endpoint"], "provider"), deploymentId: text(provider["deploymentId"]), credentialRef: credentialReference(provider["credentialRef"]), authenticationIdentityRevision: positive(provider["authenticationIdentityRevision"]), transportVersion: "accord.baizhi-responses-transport/v1" as const }),
+    magicChat: Object.freeze({ endpoint: endpoint(magic["endpoint"], "magicChat"), appId, credentialRef: credentialReference(magic["credentialRef"]), authenticationIdentityRevision: positive(magic["authenticationIdentityRevision"]), transportVersion: magic["transportVersion"] as FrozenRuntimeConfiguration["magicChat"]["transportVersion"] }),
+    provider: Object.freeze({ endpoint: endpoint(provider["endpoint"], "provider"), deploymentId: text(provider["deploymentId"]), credentialRef: credentialReference(provider["credentialRef"]), authenticationIdentityRevision: positive(provider["authenticationIdentityRevision"]), transportVersion: provider["transportVersion"] as FrozenRuntimeConfiguration["provider"]["transportVersion"] }),
     profiles: Object.freeze(profiles), policy: Object.freeze({ ...FROZEN_RUNTIME_POLICY, targetVersion }), sourceManifestDigest: hex(config["sourceManifestDigest"]), executionWindow: Object.freeze({ notBefore, deadline }), costLimitCny: null,
   });
   if (Buffer.byteLength(canonicalRuntimeJson(normalized), "utf8") > FROZEN_RUNTIME_CONFIG_MAX_BYTES) fail("CONFIG_TOO_LARGE");

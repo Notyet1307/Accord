@@ -46,6 +46,7 @@ umask 077
 CI_TEST_TMPDIR=$(mktemp -d "$CI_TEMP_PARENT/accord-r003-ci.XXXXXX") \
   || fail "a private CI test directory is required"
 CI_DENIED_DIR=
+ln -s "$CI_TEST_TMPDIR/driver-token-target" "$CI_TEST_TMPDIR/driver-token-link"
 
 cleanup_ci_state() {
   for directory in "$CI_TEST_TMPDIR" "$CI_DENIED_DIR"; do
@@ -82,7 +83,7 @@ env -i \
   --allow-fs-write="$CI_TEST_TMPDIR" \
   --import="$ROOT/scripts/runtime-capability-guard.mjs" \
   --test-isolation=none \
-  --test dist/test/validation-capabilities.integration.test.js dist/test/external-transports.conformance.test.js dist/test/frozen-runtime-config.integration.test.js dist/test/reviewer-target.integration.test.js
+  --test dist/test/validation-capabilities.integration.test.js dist/test/external-transports.conformance.test.js dist/test/frozen-runtime-config.integration.test.js dist/test/reviewer-target.integration.test.js dist/test/r003-driver.integration.test.js
 
 "$NPM_BIN" run test:conformance
 

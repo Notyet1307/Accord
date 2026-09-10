@@ -46,6 +46,7 @@ test("C5 dependency inventory denies direct, transitive, package and computed tr
   const moduleUrl = new URL("../../scripts/check-no-external-seams.mjs", import.meta.url).href;
   const { inspectTransportDependencies } = await import(moduleUrl) as { inspectTransportDependencies: (sources: readonly { path: string; source: string }[]) => string[] };
   for (const sources of [
+    [{ path: "src/core.ts", source: 'import "./driver/r003-driver.js";' }, { path: "src/driver/r003-driver.ts", source: 'import "../transports/baizhi-responses.js";' }],
     [{ path: "src/core.ts", source: 'export * from "./transports/baizhi-responses.js";' }],
     [{ path: "src/core.ts", source: 'import "../test/bridge.js";' }, { path: "test/bridge.ts", source: 'import "../src/transports/magicchat-websocket.js";' }],
     [{ path: "src/core.ts", source: 'import("./transports/" + name);' }],

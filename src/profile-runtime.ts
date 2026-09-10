@@ -32,6 +32,8 @@ export type GenericMaterializationCandidate = Readonly<{
   writerArtifact?: Readonly<Record<string, unknown>>;
 }>;
 export interface InvocationBoundOutputContract {
+  /** Versioned least-privilege model input, produced by the same authority as the output contract. */
+  readonly providerInput?: Readonly<object>;
   readonly invocationId: PreparedProfileInvocation["invocationId"];
   readonly contextDigest: string;
   readonly profile: GenericProfile;

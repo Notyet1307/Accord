@@ -99,10 +99,10 @@ export function deriveRuntimeBoardEntryId(input: { readonly invocationId: Invoca
 }
 export const deriveRuntimeAuditCorrelationId = (invocationId: InvocationId): AuditCorrelationId => deriveRuntime<"AuditCorrelationId">(PREFIXES.correlation, "runtime-correlation", [invocationId]);
 export function deriveRuntimeAuditEventId(namespace: "runtime-exhausted" | "runtime-stale", parts: readonly [InvocationId]): AuditEventId;
-export function deriveRuntimeAuditEventId(namespace: "runtime-contract-rejected", parts: readonly [AttemptId]): AuditEventId;
+export function deriveRuntimeAuditEventId(namespace: "runtime-contract-rejected" | "unknown-retry-authorized", parts: readonly [AttemptId]): AuditEventId;
 export function deriveRuntimeAuditEventId(namespace: "runtime-result-arrival" | "runtime-unknown-arrival", parts: readonly [ArrivalId]): AuditEventId;
 /** Each runtime audit namespace is bound to its sole identity family. */
-export function deriveRuntimeAuditEventId(namespace: "runtime-exhausted" | "runtime-stale" | "runtime-contract-rejected" | "runtime-result-arrival" | "runtime-unknown-arrival", parts: readonly [InvocationId] | readonly [AttemptId] | readonly [ArrivalId]): AuditEventId {
+export function deriveRuntimeAuditEventId(namespace: "runtime-exhausted" | "runtime-stale" | "runtime-contract-rejected" | "runtime-result-arrival" | "runtime-unknown-arrival" | "unknown-retry-authorized", parts: readonly [InvocationId] | readonly [AttemptId] | readonly [ArrivalId]): AuditEventId {
   return deriveRuntime<"AuditEventId">(PREFIXES.auditEvent, namespace, parts);
 }
 export function deriveSourceId(input: { readonly sourceKind: string; readonly locator: string; readonly contentDigest: string; readonly observedAt: string }): SourceId {

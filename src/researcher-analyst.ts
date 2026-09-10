@@ -442,12 +442,53 @@ function validatedContractRejectionTime(database: DatabaseSync, prepared: Prepar
   return recordedAt;
 }
 
-function validateInvocationAttemptStatePair(status: unknown, attempts: readonly Record<string, unknown>[]): void {
+function validateUnknownRetryAuthorization(database: DatabaseSync, prepared: PreparedProfileInvocation, attempts: readonly Record<string, unknown>[]): string | undefined {
+  const original = deriveRuntimeAttemptId({ invocationId: prepared.invocationId, attemptNumber: 1 });
+  const next = deriveRuntimeAttemptId({ invocationId: prepared.invocationId, attemptNumber: 2 });
+  const id = deriveRuntimeAuditEventId("unknown-retry-authorized", [original]);
+  const audit = one(database, "SELECT * FROM audit_events WHERE audit_event_id = ?", id);
+  const bound = inspectInvocationRuntimeConfiguration(database, prepared.invocationId);
+  const explicitRetry = bound?.configuration.provider.transportVersion === "accord.baizhi-responses-transport/v2";
+  if (audit === undefined) {
+    if (explicitRetry && attempts.length === 2) throw new Error("UNKNOWN_RETRY_AUTHORIZATION_MISSING");
+    return undefined;
+  }
+  const expected = { invocationId: prepared.invocationId, workflowRunId: prepared.workflowRunId, originalAttemptId: original, nextAttemptId: next, configurationDigest: bound?.reference.digest };
+  if (!explicitRetry || attempts.length !== 2 || attempts[0]?.["state"] !== "UNKNOWN" || attempts[1]?.["attempt_id"] !== next || audit["schema_version"] !== CONTRACT_VERSIONS.auditEvent || audit["event_kind"] !== `UNKNOWN_RETRY_AUTHORIZED:${original}` || audit["correlation_id"] !== deriveRuntimeAuditCorrelationId(prepared.invocationId) || audit["case_id"] !== prepared.caseId || audit["board_id"] !== prepared.boardId || audit["workflow_run_id"] !== prepared.workflowRunId || audit["receipt_id"] !== null || audit["details_json"] !== json(expected) || audit["recorded_at"] !== attempts[1]?.["created_at"] || instant(audit["recorded_at"], "retry authorizedAt") < instant(attempts[0]?.["finished_at"], "original Attempt finishedAt")) throw new Error("UNKNOWN_RETRY_AUTHORIZATION_INVALID");
+  return id;
+}
+
+export function authorizeUnknownRetry(database: DatabaseSync, suppliedAttemptId: AttemptId, configurationDigest: string, now: string) {
+  return transaction(database, () => {
+    validatePersistedRuntimeAuthorityGraph(database);
+    const originalAttemptId = parseAttemptId(suppliedAttemptId); const at = instant(now, "retry now");
+    const original = one(database, "SELECT * FROM runtime_attempts WHERE attempt_id = ?", originalAttemptId);
+    if (original === undefined || original["attempt_number"] !== 1 || original["state"] !== "UNKNOWN") throw new Error("UNKNOWN_RETRY_NOT_ELIGIBLE");
+    const prepared = canonicalPrepared(database, parseInvocationId(original["invocation_id"]));
+    const bound = inspectInvocationRuntimeConfiguration(database, prepared.invocationId);
+    if (bound === undefined || bound.reference.digest !== configurationDigest || bound.configuration.provider.transportVersion !== "accord.baizhi-responses-transport/v2") throw new Error("CONFIG_MISMATCH");
+    const nextAttemptId = deriveRuntimeAttemptId({ invocationId: prepared.invocationId, attemptNumber: 2 });
+    const id = deriveRuntimeAuditEventId("unknown-retry-authorized", [originalAttemptId]);
+    const prior = one(database, "SELECT * FROM audit_events WHERE audit_event_id = ?", id);
+    const next = one(database, "SELECT state FROM runtime_attempts WHERE attempt_id = ?", nextAttemptId);
+    if (prior !== undefined) return Object.freeze({ invocationId: prepared.invocationId, originalAttemptId, nextAttemptId, state: String(next?.["state"]), replayed: true });
+    assertRuntimeConfigurationWindow(bound.configuration, at);
+    if (rows(database, "SELECT case_id FROM cases LIMIT 2").length !== 1 || next !== undefined || at < instant(original["finished_at"], "original Attempt finishedAt")) throw new Error("UNKNOWN_RETRY_NOT_ELIGIBLE");
+    const fresh = one(database, "SELECT 1 AS present FROM runtime_invocations i JOIN workflow_runs w ON w.workflow_run_id = i.workflow_run_id JOIN boards b ON b.board_id = i.board_id JOIN cases c ON c.case_id = i.case_id WHERE i.invocation_id = ? AND i.status = 'UNKNOWN' AND w.state = i.node_id AND w.revision = i.workflow_revision AND b.revision = i.board_revision AND c.status = 'OPEN'", prepared.invocationId);
+    if (fresh === undefined) throw new Error("UNKNOWN_RETRY_NOT_ELIGIBLE");
+    database.prepare("INSERT INTO runtime_attempts (attempt_id, schema_version, invocation_id, attempt_number, state, no_sdk_retry, created_at) VALUES (?, 'accord.runtime-attempt/v1', ?, 2, 'READY', 1, ?)").run(nextAttemptId, prepared.invocationId, at);
+    database.prepare("UPDATE runtime_invocations SET status = 'READY' WHERE invocation_id = ? AND status = 'UNKNOWN'").run(prepared.invocationId);
+    database.prepare("INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at) VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)").run(id, deriveRuntimeAuditCorrelationId(prepared.invocationId), `UNKNOWN_RETRY_AUTHORIZED:${originalAttemptId}`, prepared.caseId, prepared.boardId, prepared.workflowRunId, json({ invocationId: prepared.invocationId, workflowRunId: prepared.workflowRunId, originalAttemptId, nextAttemptId, configurationDigest }), at);
+    return Object.freeze({ invocationId: prepared.invocationId, originalAttemptId, nextAttemptId, state: "READY", replayed: false });
+  });
+}
+
+function validateInvocationAttemptStatePair(status: unknown, attempts: readonly Record<string, unknown>[], authorizedRetry: boolean): void {
   const states = attempts.map((attempt) => attempt["state"]);
   const contiguous = attempts.every((attempt, index) => attempt["attempt_number"] === index + 1);
   const terminalPrior = (state: unknown): boolean => state === "UNKNOWN" || state === "DISCARDED";
   const valid = contiguous && (
-    (status === "READY" && states.length === 1 && states[0] === "READY") ||
+    (status === "READY" && (states.length === 1 && states[0] === "READY" || authorizedRetry && states.length === 2 && states[0] === "UNKNOWN" && states[1] === "READY")) ||
     (status === "RUNNING" && states.length >= 1 && states.slice(0, -1).every(terminalPrior) && (states.at(-1) === "RUNNING" || states.at(-1) === "RESULT_RECEIVED")) ||
     (status === "UNKNOWN" && states.length === 1 && terminalPrior(states[0])) ||
     (status === "FAILED" && states.length >= 1 && states.every((state) => state === "READY" || terminalPrior(state))) ||
@@ -459,6 +500,7 @@ function validateInvocationAttemptStatePair(status: unknown, attempts: readonly 
 export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): void {
   validatePersistedRuntimeConfigurations(database);
   validateLegacyProviderDeliveryProvenance(database);
+  const retryAuditIds = new Set<string>();
   const genericResolutionAuditIds = new Set<string>();
   const validateGenericResolutionCarrier = (prepared: PreparedProfileInvocation, attemptId: AttemptId, deliveryNumber: number, wireDigestValue: string, recordedAt: string): GenericOutputResolution => {
     const auditId = genericResolutionAuditId(attemptId, deliveryNumber);
@@ -477,7 +519,9 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
     const status = one(database, "SELECT status FROM runtime_invocations WHERE invocation_id = ?", invocationId)?.["status"];
     const attempts = rows(database, "SELECT attempt_id, attempt_number, state, no_sdk_retry, created_at, started_at, finished_at FROM runtime_attempts WHERE invocation_id = ? ORDER BY attempt_number", invocationId);
     if (attempts.length < 1 || attempts.length > 2) throw new Error("persisted runtime authority integrity failed: Invocation Attempt budget is invalid");
-    validateInvocationAttemptStatePair(status, attempts);
+    const retryAudit = validateUnknownRetryAuthorization(database, prepared, attempts);
+    if (retryAudit !== undefined) retryAuditIds.add(retryAudit);
+    validateInvocationAttemptStatePair(status, attempts, retryAudit !== undefined);
     for (const attempt of attempts) {
       const number = attempt["attempt_number"]; const attemptId = parseAttemptId(attempt["attempt_id"]); if ((number !== 1 && number !== 2) || attemptId !== deriveRuntimeAttemptId({ invocationId, attemptNumber: number }) || attempt["no_sdk_retry"] !== 1 || typeof attempt["state"] !== "string") throw new Error("persisted runtime authority integrity failed: Attempt identity or retry state is invalid");
       const arrivals = rows(database, "SELECT arrival_id, schema_version, invocation_id, attempt_id, arrival_number, result_id, response_id, outcome, raw_response_json, raw_response_digest, recorded_at FROM runtime_result_arrivals WHERE attempt_id = ? ORDER BY arrival_number", attemptId);
@@ -614,6 +658,8 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
     if (status !== "READY" && status !== "RUNNING" && status !== "UNKNOWN" && status !== "FAILED" && status !== "RESULT_COMMITTED") throw new Error("persisted runtime authority integrity failed: Invocation state is invalid");
     void prepared;
   }
+  const retryAudits = rows(database, "SELECT audit_event_id FROM audit_events WHERE event_kind GLOB 'UNKNOWN_RETRY_AUTHORIZED:*'");
+  if (retryAudits.length !== retryAuditIds.size || retryAudits.some((row) => !retryAuditIds.has(String(row["audit_event_id"])))) throw new Error("UNKNOWN_RETRY_AUTHORIZATION_ORPHANED");
   const persistedGenericResolutionAudits = rows(database, "SELECT audit_event_id FROM audit_events WHERE event_kind = ? OR event_kind GLOB ? OR json_extract(details_json, '$.schemaVersion') = ?", "RUNTIME_GENERIC_OUTPUT_RESOLUTION", "RUNTIME_GENERIC_OUTPUT_RESOLUTION:*", GENERIC_OUTPUT_RESOLUTION_VERSION);
   if (persistedGenericResolutionAudits.length !== genericResolutionAuditIds.size || persistedGenericResolutionAudits.some((audit) => !genericResolutionAuditIds.has(String(audit["audit_event_id"])))) throw new Error("persisted runtime authority integrity failed: generic output resolution audit is orphaned");
 }
@@ -748,6 +794,7 @@ export function beginPreparedAttempt(database: DatabaseSync, invocationId: Invoc
     if (json(bound.reference) !== json(prepared.configuration)) throw new Error("CONFIG_MISMATCH");
     assertRuntimeConfigurationWindow(bound.configuration, startedAt);
   } else if (configuration !== undefined) throw new Error("LEGACY_INVOCATION_UNBOUND");
+  validateUnknownRetryAuthorization(database, prepared, rows(database, "SELECT * FROM runtime_attempts WHERE invocation_id = ? ORDER BY attempt_number", validInvocationId));
   const claimed = transaction(database, () => {
     const invocation = one(database, "SELECT status FROM runtime_invocations WHERE invocation_id = ?", validInvocationId);
     if (invocation === undefined) throw new Error("unknown Invocation");
@@ -761,6 +808,7 @@ export function beginPreparedAttempt(database: DatabaseSync, invocationId: Invoc
     }
     let attempt = one(database, "SELECT attempt_id, attempt_number FROM runtime_attempts WHERE invocation_id = ? AND state = 'READY'", validInvocationId);
     if (attempt === undefined && invocation["status"] === "UNKNOWN") {
+      if (inspectInvocationRuntimeConfiguration(database, validInvocationId)?.configuration.provider.transportVersion === "accord.baizhi-responses-transport/v2") throw new Error("UNKNOWN_RETRY_AUTHORIZATION_REQUIRED");
       const count = one(database, "SELECT count(*) AS count FROM runtime_attempts WHERE invocation_id = ?", validInvocationId);
       if (count?.["count"] !== 1) throw new Error("Invocation exhausted its two-Attempt budget");
       const attemptId = deriveRuntimeAttemptId({ invocationId: validInvocationId, attemptNumber: 2 });

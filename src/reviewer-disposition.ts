@@ -137,7 +137,7 @@ function bindView(prepared: PreparedProfileInvocation, view: ReviewerContextView
 export function createReviewerDispositionContract(preparedInvocation: PreparedProfileInvocation, c03Decision: ProfileContextDecision): InvocationBoundOutputContract {
   const view = normalizeView(c03Decision); const evidence = bindView(preparedInvocation, view); const preparedSnapshot = json(preparedInvocation);
   const expectedTarget = freeze({ entryId: view.target.proposalId, type: "Proposal", digest: view.target.proposalDigest } as const);
-  return freeze({ invocationId: preparedInvocation.invocationId, contextDigest: preparedInvocation.contextDigest, profile: "REVIEWER", profileVersion: preparedInvocation.profileVersion, outputSchema: REVIEWER_OUTPUT_SCHEMA, materialize(context, output) {
+  return freeze({ ...(preparedInvocation.profileVersion === "accord.reviewer/v2" ? { providerInput: view } : {}), invocationId: preparedInvocation.invocationId, contextDigest: preparedInvocation.contextDigest, profile: "REVIEWER", profileVersion: preparedInvocation.profileVersion, outputSchema: REVIEWER_OUTPUT_SCHEMA, materialize(context, output) {
     if (json(context) !== preparedSnapshot) throw new TypeError("materialization Prepared Invocation identity or entries changed");
     const value = record(output, "Reviewer output"); exact(value, ["critique", "verificationResult"], "Reviewer output");
     const parsedCritique = critique(value["critique"]); const parsedVerification = verification(value["verificationResult"]); validatePair(parsedCritique, parsedVerification, expectedTarget, evidence);

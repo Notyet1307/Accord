@@ -22,6 +22,8 @@ const deliveryWorkflow = ".github/workflows/herdr-delivery-gate.yml";
 const requiredValidationEntrypoints = [
   "scripts/check-no-external-seams.mjs",
   "scripts/clean.mjs",
+  "scripts/run-r003.mjs",
+  "test/r003-driver.integration.test.ts",
   "scripts/runtime-capability-guard.mjs",
   "scripts/validate-ci.sh",
   "scripts/validate-delivery.sh",
@@ -29,6 +31,7 @@ const requiredValidationEntrypoints = [
   "src/handoff.ts",
   "test/contracts.test.ts",
   "test/helpers/c4-runner-child.ts",
+  "test/helpers/driver-runner-child.ts",
   "test/helpers/intake-crash-child.ts",
   "test/magicchat-protocol.conformance.test.ts",
   "test/researcher-analyst.integration.test.ts",
@@ -61,6 +64,7 @@ const requiredInvocationMarkers = new Map([
       "dist/test/external-transports.conformance.test.js",
       "dist/test/frozen-runtime-config.integration.test.js",
       "dist/test/reviewer-target.integration.test.js",
+      "dist/test/r003-driver.integration.test.js",
       '"$NPM_BIN" run test:conformance',
     ],
   ],
@@ -95,13 +99,14 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js",
+      "run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js",
       "run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js",
       'contracts/r003-magicchat-handoff.json',
       "ACTUAL_HANDOFF=$(run_node_restricted dist/src/handoff.js)",
     ],
   ],
-  ["test/synthetic-intake.conformance.test.ts", ['new URL("helpers/intake-crash-child.js", import.meta.url)', 'new URL("helpers/c4-runner-child.js", import.meta.url)']],
+  ["test/synthetic-intake.conformance.test.ts", ['new URL("helpers/intake-crash-child.js", import.meta.url)', 'new URL("helpers/c4-runner-child.js", import.meta.url)', 'new URL("helpers/driver-runner-child.js", import.meta.url)']],
 ]);
 const forbiddenCiInvocationMarkers = new Map([
   ["scripts/validate-ci.sh", ["operator-seatbelt-v1", "scripts/validate-delivery.sh", "scripts/validate-project.sh"]],
@@ -158,14 +163,14 @@ export function inspectTransportDependencies(sources) {
     edges.set(path, dependencies);
   }
   for (const path of edges.keys()) {
-    if (!path.startsWith("src/") || transportPaths.has(path)) continue;
+    if (!path.startsWith("src/") || transportPaths.has(path) || path === "src/driver/r003-driver.ts") continue;
     const seen = new Set();
     const queue = [path];
     while (queue.length > 0) {
       const next = queue.pop();
       if (seen.has(next)) continue;
       seen.add(next);
-      if (transportPaths.has(next)) { issues.push(`${path}: core must not depend on transport ${next}`); break; }
+      if (transportPaths.has(next) || next === "src/driver/r003-driver.ts") { issues.push(`${path}: core must not depend on transport ${next}`); break; }
       queue.push(...(edges.get(next) ?? []));
     }
   }
@@ -292,7 +297,7 @@ for (const file of files) {
   if (file.path !== policySource) {
     for (const [pattern, description] of javascriptForbidden) {
       const permittedFetch = file.path === "src/transports/baizhi-responses.ts" && description === "direct network API call" && !pattern.test(source.replace(/\bglobalThis\.fetch\s*\(/gu, "transportSend("));
-      if (pattern.test(source) && file.path !== capabilityRegression && !permittedFetch) {
+      if (pattern.test(source) && file.path !== capabilityRegression && !permittedFetch && !(file.path === "scripts/run-r003.mjs" && description === "secret-like file read")) {
         failures.push(`${file.path}: ${description}`);
       }
     }

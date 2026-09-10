@@ -256,3 +256,28 @@ test("C5 cumulative WebSocket bytes are bounded below the envelope-count limit",
   assert.equal(await transport.closed, "MAGICCHAT_ENVELOPE_REJECTED");
   assert.equal(socket.sent.length, 0); release();
 });
+
+test("Driver transport v2 aborts before I/O and while reading a provider body", async (t) => {
+  const { prepared, authority, attempts } = fixture(t);
+  const cancelled = new AbortController(); cancelled.abort(); let calls = 0;
+  const v2 = { ...config, transportVersion: "accord.baizhi-responses-transport/v2" as const };
+  assert.throws(() => prepareBaizhiResponsesPort(v2, prepared, "Return JSON", async () => { calls++; return response(); }, undefined, cancelled.signal), /PROVIDER_ABORTED/u);
+  await assert.rejects(connectMagicChatTransport({ ...wsConfig, transportVersion: "accord.magicchat-websocket-transport/v2" }, () => undefined, () => { calls++; return new FakeSocket(); }, cancelled.signal), /MAGICCHAT_ABORTED/u);
+  assert.equal(calls, 0); assert.deepEqual(attempts(), ["READY"]);
+  const controller = new AbortController(); let bodyCancelled = false;
+  const port = prepareBaizhiResponsesPort(v2, prepared, "Return JSON", async () => { calls++; return new Response(new ReadableStream({ cancel() { bodyCancelled = true; } })); }, undefined, controller.signal);
+  const running = authority.executePreparedAttempt(prepared, port, now);
+  const rejected = assert.rejects(running, /PROVIDER_ABORTED/u);
+  await microtasks(); controller.abort(); await rejected;
+  assert.equal(bodyCancelled, true); assert.equal(calls, 1); assert.deepEqual(attempts(), ["UNKNOWN"]);
+});
+
+test("Driver transport v2 aborts during socket handshake and terminates only its socket within five seconds", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const controller = new AbortController(); const socket = new FakeSocket();
+  const ready = connectMagicChatTransport({ ...wsConfig, transportVersion: "accord.magicchat-websocket-transport/v2" }, () => undefined, () => socket, controller.signal);
+  const rejected = assert.rejects(ready, /MAGICCHAT_ABORTED/u);
+  controller.abort(); await rejected; assert.equal(socket.closes, 1);
+  t.mock.timers.tick(4999); assert.equal(socket.terminations, 0);
+  t.mock.timers.tick(1); assert.equal(socket.terminations, 1);
+});

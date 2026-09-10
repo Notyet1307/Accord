@@ -1,6 +1,7 @@
 import { normalizeMagicChatEnvelope, parseMagicChatMessageBody } from "../contracts/magicchat.js";
 import type { MagicChatRequestEnvelope } from "../magicchat/adapter.js";
 
+export const MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION = "accord.magicchat-websocket-transport/v2";
 export const MAGICCHAT_TRANSPORT_VERSION = "accord.magicchat-websocket-transport/v1";
 export const MAGICCHAT_FRAME_MAX_BYTES = 1_048_576;
 export const MAGICCHAT_QUEUE_MAX_BYTES = 4_194_304;
@@ -25,7 +26,7 @@ export interface SocketOptions {
   readonly skipUTF8Validation: false;
 }
 export type SocketFactory = (url: string, options: SocketOptions) => MagicChatSocket;
-export interface MagicChatTransportConfig { readonly url: string; readonly appId: string; readonly credential: string; }
+export interface MagicChatTransportConfig { readonly transportVersion?: typeof MAGICCHAT_TRANSPORT_VERSION | typeof MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION; readonly url: string; readonly appId: string; readonly credential: string; }
 export interface MagicChatTransport {
   /** Submits synchronously; resolves only after a correlated response passes the receiver. */
   send(request: MagicChatRequestEnvelope): Promise<void>;
@@ -75,7 +76,10 @@ export async function connectMagicChatTransport(
   config: MagicChatTransportConfig,
   receive: (envelope: unknown) => void | Promise<void>,
   factory?: SocketFactory,
+  signal?: AbortSignal,
 ): Promise<MagicChatTransport> {
+  if ((config.transportVersion ?? MAGICCHAT_TRANSPORT_VERSION) !== (signal === undefined ? MAGICCHAT_TRANSPORT_VERSION : MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION)) fail("MAGICCHAT_TRANSPORT_VERSION_MISMATCH");
+  if (signal?.aborted) fail("MAGICCHAT_ABORTED");
   const url = configUrl(config);
   const credential = config.credential;
   const options: SocketOptions = Object.freeze({
@@ -87,7 +91,7 @@ export async function connectMagicChatTransport(
   try {
     // Import only on explicit live construction, so offline tests cannot acquire network modules.
     if (factory !== undefined) socket = factory(url, options);
-    else { const { default: WebSocketClient } = await import("ws"); socket = new WebSocketClient(url, options); }
+    else { const { default: WebSocketClient } = await import("ws"); if (signal?.aborted) fail("MAGICCHAT_ABORTED"); socket = new WebSocketClient(url, options); }
   } catch { return fail("MAGICCHAT_CONNECT_FAILED"); }
 
   let stopped = false;
@@ -109,6 +113,7 @@ export async function connectMagicChatTransport(
   const stop = (code: string): void => {
     if (stopped) return;
     stopped = true;
+    signal?.removeEventListener("abort", abort);
     clearTimeout(handshakeTimer);
     if (!opened) rejectOpen(new Error(code));
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(code)); }
@@ -118,6 +123,8 @@ export async function connectMagicChatTransport(
     closeTimer = setTimeout(() => { try { socket.terminate(); } catch { /* owned socket only */ } }, 5_000);
     try { socket.close(); } catch { try { socket.terminate(); } catch { /* closed socket */ } }
   };
+  const abort = (): void => stop("MAGICCHAT_ABORTED");
+  signal?.addEventListener("abort", abort, { once: true });
   const drain = async (): Promise<void> => {
     if (draining) return;
     draining = true;
@@ -156,6 +163,7 @@ export async function connectMagicChatTransport(
       return response;
     },
   });
+  if (signal?.aborted) abort();
   socket.on("open", () => { if (stopped) return; opened = true; clearTimeout(handshakeTimer); resolveOpen(transport); });
   socket.on("error", () => stop("MAGICCHAT_SOCKET_FAILED"));
   socket.on("unexpected-response", () => stop("MAGICCHAT_HANDSHAKE_REJECTED"));

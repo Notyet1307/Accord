@@ -2,8 +2,8 @@
 
 ## 状态、权威与授权
 
-- Revision：`R003-DRIVER/r1`；状态：开发规格，尚未实现。2026-09-09 用户明确要求「你得创建啊 我后续要按照issue、spec去开发」，授权本轮编写和发布 Spec、创建开发 Issue；本轮不实施这些功能、不调用真实服务。
-- 核验代码基线：`c625517687a8b90c2e31a509c149b2102c3aaf5e`（C5 PR #69 已合并）。实施时重新核对 main；若契约或迁移序号漂移，先修订本 Spec，不能沿用过期证据。
+- Revision：`R003-DRIVER/r1.1`；状态：本地实施规格。2026-09-10 用户明确答复「授权 F2 推送合并，并继续 Driver」，授权依赖满足后的 Driver 本地实现与离线验收；本任务未获真实服务、凭据或生产操作授权。历史 r1 的规格发布授权保持原记录。
+- 实施基线：`412afdb029a1e3d71c2f5aac676646b95f034715`，F1 PR #74 与 F2 PR #75 均已合并；沿用 schema 12，无新增迁移。
 - Authoritative inputs：[R003/r1](../product/releases/r003-governed-case-blackboard-walking-skeleton.md)、[ADR-0002](../adr/0002-production-coordination-runtime-language.md)、[ADR-0003](../adr/0003-r003-governed-case-blackboard-boundary.md)、[C5/r1.1](r003-c5-external-adapter-conformance.md)、当前代码/测试，以及 [delivery gate](../agents/delivery-gate.md)、[tracker](../agents/issue-tracker.md)、[labels](../agents/triage-labels.md)。Vision 只提供长期方向。
 - GitHub Issue 是唯一开发任务入口，只链接本 Spec 的固定提交与后续 PR；不复制规格、不建立历史 Harness 子图。后续开发须绑定实际实施请求、该 Spec 修订和代码 base/head。
 - 保留单进程、一个冻结合成 Case、SQLite/WAL、四个固定 Profile、一次精确 Human Approval、一个 Response Owner；不改变外部事实权威，不引入 Lody/ACP/CRDT/通用 Runtime。
@@ -23,6 +23,16 @@
 为受控停止，允许在 `src/transports/baizhi-responses.ts` 的显式构造参数增加 caller AbortSignal 接缝并更新 transport 契约版本；只取消本地请求/读取，不代表 provider 未执行或已取消。已取消信号必须在 I/O 前拒绝；信号到达后使用原有 UNKNOWN 仲裁，无自动重试。F1 配置须冻结实际新 transport 版本及其策略，不能静默覆盖 C5 v1。对应 fake 回归加入原 transport 测试。
 
 精确新增能力路径：`src/driver/r003-driver.ts` 只装配端口与 authority，不读取环境/秘密；`scripts/run-r003.mjs` 是唯一显式 CLI/config/credential 文件读取入口；`test/r003-driver.integration.test.ts` 注入 fake，无网络和秘密读取豁免。核心不能反向 import driver，更新静态依赖图以覆盖核心→driver→transport 的间接边，并只为上述入口开放需要的能力；runtime guard 和 CI 权限不放宽。
+
+### r1.1 具体实施接缝
+
+- Baizhi 与 MagicChat 均增加显式 v2 transport + caller AbortSignal；v1 构造/配置/恢复语义保持。MagicChat 的 signal 同样覆盖握手期，关闭仍只针对 owned socket。Driver 要求两端 v2 及 F2 Reviewer/Writer v2，不静默升级旧运行配置。
+- v2 模型输入由既有 output contract 的只读 providerInput 提供：Reviewer 使用 C03 ALLOW 的完整引用图投影；Writer 使用原 eligibility 校验后的 accepted evidence/非 issue verification bases（ID、digest、精确正文）和 H1。禁止发送全量 Board，保留原 Prepared Invocation 作为身份与结果提交绑定；v1 wire 不变。
+- receive 只同步持久化和唤醒，不等待 RPC 或模型 Promise；协调器串行选取动作，异步模型期间持续接收消息。普通消息维持 C3 OBSERVED_INPUT 语义，不由 Driver 另造 Workflow 路由。
+- 新只读 `inspectDriverWork(appId)` 要求数据库内至多一个匹配 Case/Run；返回当前 Invocation/Attempt、目标/H1引用、候选 Evidence ID及等待原因。既有 C03 审计操作通过薄 authority 方法暴露，不伪装为只读。
+- v2 transport 绑定的运行必须先有 UNKNOWN_RETRY_AUTHORIZED 审计才能创建/启动第二次 Attempt；允许的新增状态组合仅为有精确审计绑定的 READY + [UNKNOWN, READY]。旧 v1 路径保持原恢复契约。新审计在 startup/Trace 时校验，损坏拒绝。
+- CLI `scripts/run-r003.mjs` 可显式读取参数指定 config/credential 普通文件、注册 SIGINT/SIGTERM、写受限 Trace 摘要；不读取环境或全盘扫描。文件系统入口可注入执行函数进行离线测试，生产调用只在直接执行该脚本且 `--live` 完整时发生。
+- 子进程故障验收复用 `test/synthetic-intake.conformance.test.ts` 的 child-process 权限；精确增加 `test/helpers/driver-runner-child.ts`（fake I/O、无网络）及对应受限文件 inventory，不放宽 runtime guard。
 
 ## 显式配置与入口
 
@@ -72,4 +82,4 @@
 
 交付 PR 绑定实际实施授权、Issue、base/head、Spec 固定提交和 SHA-256、测试命令/退出码/日志、审查发现及处置、迁移与接口变化、身份与恢复证据。运行固定 Node 24.19.0/npm 11.17.0 下的 `TMPDIR=/private/tmp ./scripts/validate-ci.sh`，将本任务离线测试加入精确 inventory 和受限执行入口；保留 workflow/check 名称与 runtime capability guard。说明哪些旧行为刻意保持、后续消费者是否仍成立。
 
-普通 CI 不证明 trusted operator qualification 或真实 MagicChat/Baizhi 兼容性。本轮不产生实现、测试通过、真实人工批准或生产授权。不得设置标记伪造 qualification；真实执行须单独绑定环境和人的授权。
+普通 CI 不证明 trusted operator qualification 或真实 MagicChat/Baizhi 兼容性。实现与测试结论绑定实际执行证据；离线结果不产生真实人工批准或生产授权。不得设置标记伪造 qualification；真实执行须单独绑定环境和人的授权。

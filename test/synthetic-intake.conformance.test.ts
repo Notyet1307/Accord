@@ -812,3 +812,25 @@ test(
     process.stdout.write(`C4_EVIDENCE ${root}\n`);
   },
 );
+
+for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+  test(`Driver real child ${signal} preserves UNKNOWN and restart makes zero provider calls`, async () => {
+    const temporary = temporaryDatabase("driver-child");
+    const childPath = fileURLToPath(new URL("helpers/driver-runner-child.js", import.meta.url));
+    const child = spawn(process.execPath, [...c4InheritedCapabilityArguments(), childPath, temporary.path, "hold"], { env: {}, stdio: ["ignore", "pipe", "pipe"] });
+    let output = ""; let diagnostic = ""; let signalled = false;
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    try {
+      child.stderr.on("data", (data: Buffer) => { diagnostic += data.toString(); });
+      child.stdout.on("data", (data: Buffer) => { output += data.toString(); if (!signalled && output.includes("PROVIDER_STARTED")) { signalled = true; child.kill(signal); } });
+      const exit = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal })); });
+      clearTimeout(timer); assert.equal(signalled, true, diagnostic); assert.equal(exit.code, signal === "SIGTERM" ? 0 : null, output + diagnostic);
+      if (signal === "SIGTERM") assert.ok(output.includes('"state":"STOPPED"'), output);
+      else assert.equal(exit.signal, "SIGKILL");
+      const recovered = spawnSync(process.execPath, [...c4InheritedCapabilityArguments(), childPath, temporary.path, "recover"], { env: {}, encoding: "utf8", timeout: 10_000 });
+      assert.equal(recovered.status, 0, String(recovered.stderr));
+      assert.ok(recovered.stdout.includes('"state":"UNKNOWN"'), recovered.stdout); assert.ok(recovered.stdout.includes('"calls":0'), recovered.stdout);
+      const raw = new DatabaseSync(temporary.path); try { assert.equal(raw.prepare("SELECT count(*) AS n FROM runtime_attempts").get()?.["n"], 1); assert.equal(raw.prepare("SELECT state FROM runtime_attempts").get()?.["state"], "UNKNOWN"); } finally { raw.close(); }
+    } finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); temporary.cleanup(); }
+  });
+}
