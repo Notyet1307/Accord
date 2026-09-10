@@ -10,7 +10,7 @@ export interface MagicChatSocket {
   readonly readyState: number;
   readonly bufferedAmount: number;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
-  send(data: string, callback: (error?: Error) => void): void;
+  send(data: string, callback: (error?: Error | null) => void): void;
   close(): void;
   terminate(): void;
 }
@@ -158,7 +158,7 @@ export async function connectMagicChatTransport(
         const timer = setTimeout(() => stop("MAGICCHAT_RPC_TIMEOUT"), 30_000);
         pending.set(id, { resolve, reject, timer });
       });
-      try { socket.send(bytes, (error) => { if (error !== undefined) stop("MAGICCHAT_SEND_FAILED"); }); }
+      try { socket.send(bytes, (error) => { if (error !== undefined && error !== null) stop("MAGICCHAT_SEND_FAILED"); }); }
       catch { stop("MAGICCHAT_SEND_FAILED"); }
       return response;
     },

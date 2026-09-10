@@ -281,3 +281,16 @@ test("Driver transport v2 aborts during socket handshake and terminates only its
   t.mock.timers.tick(4999); assert.equal(socket.terminations, 0);
   t.mock.timers.tick(1); assert.equal(socket.terminations, 1);
 });
+
+test("WebSocket Node success callback null must preserve the pending RPC until its response", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const socket = new FakeSocket();
+  socket.send = (bytes, callback) => { socket.sent.push(bytes); callback(null as unknown as Error); };
+  const connecting = connectMagicChatTransport(wsConfig, () => undefined, () => socket);
+  socket.open(); const transport = await connecting;
+  const sent = transport.send(ack);
+  socket.message(magicChatAckSuccessResponse(ack.id, 1));
+  await sent;
+  assert.equal(socket.closes, 0);
+  transport.close(); t.mock.timers.tick(5000);
+});
