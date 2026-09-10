@@ -2,8 +2,9 @@
 
 ## 状态、权威与授权
 
-- Revision：`R003-F2/r1`；状态：开发规格，尚未实现。2026-09-09 用户明确要求「你得创建啊 我后续要按照issue、spec去开发」，授权本轮编写和发布 Spec、创建开发 Issue；本轮不实施这些功能、不调用真实服务。
-- 核验代码基线：`c625517687a8b90c2e31a509c149b2102c3aaf5e`（C5 PR #69 已合并）。实施时重新核对 main；若契约或迁移序号漂移，先修订本 Spec，不能沿用过期证据。
+- Revision：`R003-F2/r1.1`；状态：本地实施规格。2026-09-10 用户在本会话查看 F2 在制改动后要求「你来接手继续吧」，先据此接续 F2 本地实现与离线验证；用户随后明确答复「授权 F2 推送合并，并继续 Driver」，授权 F2 提交、推送、创建 PR、当前提交检查通过后合并，以及依赖满足后的 Driver 本地实现。真实服务执行仍未授权。
+- 历史 r1 在 `d78ebb22e03001cc60306aa60f37df4e23090ee2` 仅获规格/Issue 发布授权，该历史事实不变。
+- 实施基线：`b7dbb31ba5de54893e1e12ffec07966ef055be9f`（F1 PR #74 已合并）；沿用 `012_r003_frozen_runtime_config.sql` / schema 12，不新增迁移。接手续做的 8 个源码文件改动在同一工作区保留并纳入验收；未提交结果须按工作区差异标识，不冒充基线 SHA 的 CI。
 - Authoritative inputs：[R003/r1](../product/releases/r003-governed-case-blackboard-walking-skeleton.md)、[ADR-0002](../adr/0002-production-coordination-runtime-language.md)、[ADR-0003](../adr/0003-r003-governed-case-blackboard-boundary.md)、[C5/r1.1](r003-c5-external-adapter-conformance.md)、当前代码/测试，以及 [delivery gate](../agents/delivery-gate.md)、[tracker](../agents/issue-tracker.md)、[labels](../agents/triage-labels.md)。Vision 只提供长期方向。
 - GitHub Issue 是唯一开发任务入口，只链接本 Spec 的固定提交与后续 PR；不复制规格、不建立历史 Harness 子图。后续开发须绑定实际实施请求、该 Spec 修订和代码 base/head。
 - 保留单进程、一个冻结合成 Case、SQLite/WAL、四个固定 Profile、一次精确 Human Approval、一个 Response Owner；不改变外部事实权威，不引入 Lody/ACP/CRDT/通用 Runtime。
@@ -23,6 +24,13 @@
 新增显式版本的实际目标授权契约、确定性 selector、context/恢复分流以及相关 Reviewer/Writer 消费者适配与离线测试。不改旧 handoff/oracle bytes，不放宽为任意 target，不引入模型选目标、人工目标选择 UI、多个 Reviewer、重写 Analyst 输出、支持 SUPPORTED target 的新产品流程或自动审批。
 
 本任务不增加 schema 迁移：持久 `profile_contexts.profile_version` 与 `runtime_invocations.profile_version` 明确使用 `accord.reviewer/v2`、`accord.writer/v2` 表示实际 winner 策略；旧 v1 Profile 继续表示固定目标。Context 存储 schema 保留 v1，若采用 F1 配置绑定则用 F1 定义的 config-bound-v2；不靠改变 schema CHECK 来区分目标。Profile 版本已进入 contextDigest，materialization/output 引用必须回查同一持久 Profile 版本。output payload/H1 形状不变；解析器按引用的 Profile 版本应用对应校验，未知组合拒绝。禁止按目标文字猜版本或静默重解释旧记录。
+
+### r1.1 实施绑定
+
+- 新路径通过 F1 `prepareConfiguredProfileInvocation` 启用：Reviewer/Writer 必须同时为 v2，`policy.targetVersion` 必须为 `accord.reviewer-target/analyst-winner-v1`；旧 v1 配对使用旧策略，混合或未知组合拒绝。配置引用 digest 随持久 Context 绑定目标策略，不能重启时按新配置解释旧结果。
+- Analyst 本身及 output schema 仍为 v1；仅已冻结新 target policy 的 Invocation 允许非固定文本和引用至少一个 unsupported Claim 的多 Claim Proposal。旧配置及未绑定配置的历史 Invocation 保留原固定文本与单 Claim 校验；缺失/多个目标在新 Reviewer 准备前停止。
+- prepare、授权投影及 handoff 共用实际 winner selector；Writer 创建与持久重验共用同版本目标投影。Writer 的 H1 全图复核发生在同一事务的 Runtime 图完整之后、审批请求之前；失败回滚整个 winner，不暴露部分完成。
+- 使用 `test/reviewer-target.integration.test.ts`，纳入既有 CI、受限本地验证入口和精确源码 inventory。新消息处理与 C3 publication freshness 规则不变；Context 的 Board/Workflow revision 漂移仍按原 gate 拒绝，不在 F2 增加会话改写 Workflow 的路由。
 
 ## 目标选择与 State / Artifact handoff
 
@@ -64,4 +72,4 @@
 
 交付 PR 绑定实际实施授权、Issue、base/head、Spec 固定提交和 SHA-256、测试命令/退出码/日志、审查发现及处置、迁移与接口变化、身份与恢复证据。运行固定 Node 24.19.0/npm 11.17.0 下的 `TMPDIR=/private/tmp ./scripts/validate-ci.sh`，将本任务离线测试加入精确 inventory 和受限执行入口；保留 workflow/check 名称与 runtime capability guard。说明哪些旧行为刻意保持、后续消费者是否仍成立。
 
-普通 CI 不证明 trusted operator qualification 或真实 MagicChat/Baizhi 兼容性。本轮不产生实现、测试通过、真实人工批准或生产授权。不得设置标记伪造 qualification；真实执行须单独绑定环境和人的授权。
+普通 CI 不证明 trusted operator qualification 或真实 MagicChat/Baizhi 兼容性。实现和测试结论必须来自本轮实际命令；离线结果不产生真实人工批准或生产授权。不得设置标记伪造 qualification；真实执行须单独绑定环境和人的授权。

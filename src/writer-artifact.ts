@@ -15,7 +15,8 @@ import {
   type ResultId,
 } from "./core/ids.js";
 import type { DurableGenericMaterialization, InvocationBoundOutputContract } from "./profile-runtime.js";
-import type { PreparedProfileInvocation } from "./researcher-analyst.js";
+import { selectAnalystWinnerTarget, type PreparedProfileInvocation } from "./researcher-analyst.js";
+import { projectPreparedProfileTarget } from "./reviewer-context.js";
 
 export const ARTIFACT_SCHEMA_VERSION = "accord.artifact/v1" as const;
 export const WRITER_ARTIFACT_HANDOFF_KIND = "WRITER_ARTIFACT" as const;
@@ -182,11 +183,21 @@ export function validatePersistedAcceptedEvidence(database: DatabaseSync): void 
   if (acceptanceAudits.length !== validatedAuditIds.size || acceptanceAudits.some((audit) => !validatedAuditIds.has(String(audit["audit_event_id"])))) throw new Error("accepted EvidenceRef audit is orphaned");
 }
 
+function assertWriterTargetAuthorization(database: DatabaseSync, context: PreparedProfileInvocation, h1: ReviewerDispositionHandoff): void {
+  if (context.profileVersion !== "accord.writer/v1" && context.profileVersion !== "accord.writer/v2" || h1.profileVersion !== (context.profileVersion === "accord.writer/v2" ? "accord.reviewer/v2" : "accord.reviewer/v1")) throw new TypeError("Writer and Reviewer target policy versions differ");
+  if (context.profileVersion === "accord.writer/v1") return;
+  const target = selectAnalystWinnerTarget(database, context.caseId, context.workflowRunId, context.boardId);
+  if (h1.target.entryId !== target.proposalId || h1.target.digest !== target.proposalDigest) throw new TypeError("Writer H1 target differs from Analyst winner");
+  const view = projectPreparedProfileTarget(database, context, target);
+  for (const ref of [h1.critique, h1.verificationResult]) if (!view.entries.some((entry) => entry.id === ref.entryId && entry.digest === ref.contentDigest)) throw new TypeError("Writer H1 is outside its authorized projection");
+}
+
 /** Builds the sole fixed Writer output contract from current accepted authority. */
 export function createWriterArtifactContract(database: DatabaseSync, context: PreparedProfileInvocation, h1: ReviewerDispositionHandoff): InvocationBoundOutputContract {
   if (context.profile !== "WRITER" || context.caseId !== h1.caseId || context.workflowRunId !== h1.workflowRunId || context.boardId !== h1.boardId || context.boardRevision <= h1.boardRevision) throw new TypeError("Writer Context is not exact post-promotion authority");
   const current = database.prepare("SELECT c.status, b.revision AS board_revision, w.state, w.revision AS workflow_revision FROM cases c JOIN boards b ON b.case_id = c.case_id JOIN workflow_runs w ON w.case_id = c.case_id AND w.board_id = b.board_id WHERE c.case_id = ?").get(context.caseId) as Row | undefined;
   if (current === undefined || current["status"] !== "OPEN" || current["state"] !== "WRITER" || current["board_revision"] !== context.boardRevision || current["workflow_revision"] !== context.workflowRevision) throw new TypeError("Writer Context is stale");
+  assertWriterTargetAuthorization(database, context, h1);
   const evidence = acceptedEvidence(database, context); if (evidence.size < 1) throw new TypeError("Writer Context has no accepted EvidenceRef");
   const verification = context.entries.find((entry) => entry.id === h1.verificationResult.entryId && entry.digest === h1.verificationResult.contentDigest && entry.type === "VerificationResult");
   const critique = context.entries.find((entry) => entry.id === h1.critique.entryId && entry.digest === h1.critique.contentDigest && entry.type === "Critique");
@@ -230,6 +241,7 @@ function parseCarrier(value: unknown, context: PreparedProfileInvocation): Write
 
 function assertArtifactEligibility(database: DatabaseSync, context: PreparedProfileInvocation, artifact: WriterArtifactCarrier, authoritativeH1: ReviewerDispositionHandoff): void {
   if (artifact.reviewerResultId !== authoritativeH1.resultId || artifact.reviewerHandoffId !== authoritativeH1.handoffId || json(artifact.reviewerHandoff) !== json(authoritativeH1) || authoritativeH1.caseId !== context.caseId || authoritativeH1.workflowRunId !== context.workflowRunId || authoritativeH1.boardId !== context.boardId) throw new TypeError("Writer Artifact does not bind the exact durable H1");
+  assertWriterTargetAuthorization(database, context, authoritativeH1);
   const evidence = acceptedEvidence(database, context);
   for (const assertion of artifact.materialAssertions) {
     if (assertion.basis.kind === "ACCEPTED_EVIDENCE") { const accepted = evidence.get(assertion.basis.entryId); if (accepted === undefined || accepted.contentDigest !== assertion.basis.contentDigest || accepted.content !== assertion.statement) throw new TypeError("Writer Artifact contains an ineligible Evidence assertion"); continue; }

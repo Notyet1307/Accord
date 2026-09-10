@@ -14,6 +14,7 @@ export const FROZEN_RUNTIME_POLICY = Object.freeze({
   providerRequestMaxBytes: 131_072, providerResponseMaxBytes: 1_048_576, providerWireMaxCharacters: 65_536, providerWireMaxBytes: 65_536,
   providerMaxOutputTokens: 8192, providerTimeoutMs: 120_000, sdkRetries: 0, httpRetries: 0, automaticReconnects: 0, invocationAttemptBudget: 2,
 } as const);
+export const REVIEWER_TARGET_POLICY_VERSION = "accord.reviewer-target/analyst-winner-v1" as const;
 export type FrozenProfile = "RESEARCHER" | "ANALYST" | "REVIEWER" | "WRITER";
 export interface FrozenProfileConfiguration {
   readonly modelId: string; readonly profileVersion: string; readonly outputSchema: string;
@@ -25,7 +26,7 @@ export interface FrozenRuntimeConfiguration {
   readonly magicChat: Readonly<{ endpoint: string; appId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.magicchat-websocket-transport/v1" }>;
   readonly provider: Readonly<{ endpoint: string; deploymentId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.baizhi-responses-transport/v1" }>;
   readonly profiles: Readonly<Record<FrozenProfile, FrozenProfileConfiguration>>;
-  readonly policy: typeof FROZEN_RUNTIME_POLICY;
+  readonly policy: Omit<typeof FROZEN_RUNTIME_POLICY, "targetVersion"> & Readonly<{ targetVersion: typeof FROZEN_RUNTIME_POLICY.targetVersion | typeof REVIEWER_TARGET_POLICY_VERSION }>;
   readonly sourceManifestDigest: string;
   readonly executionWindow: Readonly<{ notBefore: string; deadline: string }>;
   readonly costLimitCny: null;
@@ -36,8 +37,12 @@ export interface AcceptedFrozenRuntimeConfiguration {
   readonly canonicalJson: string; readonly acceptedAt: string;
 }
 function fail(code = "CONFIG_INVALID"): never { throw new Error(code); }
+const VALIDATED_CONFIGURATIONS = new WeakSet<object>();
 function object(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) fail();
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail();
+  const prototype = Object.getPrototypeOf(value);
+  const constructorValue = prototype === null ? undefined : Reflect.get(prototype, "constructor"); const plain = prototype === null || Object.getPrototypeOf(prototype) === null && constructorValue !== null && typeof constructorValue === "function" && Reflect.get(constructorValue, "name") === "Object";
+  if (!plain) fail();
   return value as Record<string, unknown>;
 }
 function exact(value: Record<string, unknown>, keys: readonly string[]): void {
@@ -71,7 +76,10 @@ export function canonicalRuntimeJson(value: unknown): string {
   const canonical = (item: unknown): unknown => Array.isArray(item) ? item.map(canonical) : item !== null && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonical(Reflect.get(item, key))])) : item;
   return JSON.stringify(canonical(value));
 }
-export function runtimeConfigurationDigest(value: unknown): string { return createHash("sha256").update(canonicalRuntimeJson(normalizeFrozenRuntimeConfiguration(value)), "utf8").digest("hex"); }
+export function runtimeConfigurationDigest(value: unknown): string {
+  const configuration = value !== null && typeof value === "object" && VALIDATED_CONFIGURATIONS.has(value) ? value : normalizeFrozenRuntimeConfiguration(value);
+  return createHash("sha256").update(canonicalRuntimeJson(configuration), "utf8").digest("hex");
+}
 export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRuntimeConfiguration {
   const config = object(value);
   exact(config, ["schemaVersion", "configurationId", "revision", "magicChat", "provider", "profiles", "policy", "sourceManifestDigest", "executionWindow", "costLimitCny"]);
@@ -85,8 +93,9 @@ export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRunti
   const rawProfiles = object(config["profiles"]); const names = ["RESEARCHER", "ANALYST", "REVIEWER", "WRITER"] as const; exact(rawProfiles, names);
   const profiles = Object.fromEntries(names.map((name) => {
     const profile = object(rawProfiles[name]); exact(profile, ["modelId", "profileVersion", "outputSchema", "instructions", "instructionsDigest"]);
-    const profileVersion = `accord.${name.toLowerCase()}/v1`; const outputSchema = `accord.${name.toLowerCase()}-output/v1`;
-    if (profile["profileVersion"] !== profileVersion || profile["outputSchema"] !== outputSchema) fail("CONFIG_VERSION_UNSUPPORTED");
+    const profileVersion = profile["profileVersion"];
+    const expectedVersion = name === "REVIEWER" || name === "WRITER" ? [ `accord.${name.toLowerCase()}/v1`, `accord.${name.toLowerCase()}/v2` ] : [ `accord.${name.toLowerCase()}/v1` ]; const outputSchema = `accord.${name.toLowerCase()}-output/v1`;
+    if (typeof profileVersion !== "string" || !expectedVersion.includes(profileVersion) || profile["outputSchema"] !== outputSchema) fail("CONFIG_VERSION_UNSUPPORTED");
     const instructions = profile["instructions"];
     if (typeof instructions !== "string" || instructions.trim().length === 0 || instructions.length > FROZEN_RUNTIME_CONFIG_MAX_BYTES || Buffer.from(instructions, "utf8").toString("utf8") !== instructions) fail();
     const instructionsDigest = hex(profile["instructionsDigest"]);
@@ -94,16 +103,20 @@ export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRunti
     return [name, Object.freeze({ modelId: text(profile["modelId"], 160), profileVersion, outputSchema, instructions, instructionsDigest })];
   })) as Record<FrozenProfile, FrozenProfileConfiguration>;
   const policy = object(config["policy"]); exact(policy, Object.keys(FROZEN_RUNTIME_POLICY));
-  if (Object.entries(FROZEN_RUNTIME_POLICY).some(([key, expected]) => policy[key] !== expected)) fail("CONFIG_POLICY_UNSUPPORTED");
+  if (Object.entries(FROZEN_RUNTIME_POLICY).some(([key, expected]) => key !== "targetVersion" && policy[key] !== expected)) fail("CONFIG_POLICY_UNSUPPORTED");
+  const reviewerVersion = (rawProfiles["REVIEWER"] as Record<string, unknown>)["profileVersion"]; const writerVersion = (rawProfiles["WRITER"] as Record<string, unknown>)["profileVersion"];
+  const targetVersion = reviewerVersion === "accord.reviewer/v2" && writerVersion === "accord.writer/v2" ? REVIEWER_TARGET_POLICY_VERSION : reviewerVersion === "accord.reviewer/v1" && writerVersion === "accord.writer/v1" ? FROZEN_RUNTIME_POLICY.targetVersion : undefined;
+  if (targetVersion === undefined || policy["targetVersion"] !== targetVersion) fail("CONFIG_VERSION_MIXED");
   const window = object(config["executionWindow"]); exact(window, ["notBefore", "deadline"]);
   const notBefore = instant(window["notBefore"]); const deadline = instant(window["deadline"]); if (notBefore >= deadline) fail();
   const normalized: FrozenRuntimeConfiguration = Object.freeze({
     schemaVersion: FROZEN_RUNTIME_CONFIG_VERSION, configurationId: identifier(config["configurationId"]), revision: positive(config["revision"]),
     magicChat: Object.freeze({ endpoint: endpoint(magic["endpoint"], "magicChat"), appId, credentialRef: credentialReference(magic["credentialRef"]), authenticationIdentityRevision: positive(magic["authenticationIdentityRevision"]), transportVersion: "accord.magicchat-websocket-transport/v1" as const }),
     provider: Object.freeze({ endpoint: endpoint(provider["endpoint"], "provider"), deploymentId: text(provider["deploymentId"]), credentialRef: credentialReference(provider["credentialRef"]), authenticationIdentityRevision: positive(provider["authenticationIdentityRevision"]), transportVersion: "accord.baizhi-responses-transport/v1" as const }),
-    profiles: Object.freeze(profiles), policy: FROZEN_RUNTIME_POLICY, sourceManifestDigest: hex(config["sourceManifestDigest"]), executionWindow: Object.freeze({ notBefore, deadline }), costLimitCny: null,
+    profiles: Object.freeze(profiles), policy: Object.freeze({ ...FROZEN_RUNTIME_POLICY, targetVersion }), sourceManifestDigest: hex(config["sourceManifestDigest"]), executionWindow: Object.freeze({ notBefore, deadline }), costLimitCny: null,
   });
   if (Buffer.byteLength(canonicalRuntimeJson(normalized), "utf8") > FROZEN_RUNTIME_CONFIG_MAX_BYTES) fail("CONFIG_TOO_LARGE");
+  VALIDATED_CONFIGURATIONS.add(normalized);
   return normalized;
 }
 export function parseFrozenRuntimeConfiguration(wire: unknown): FrozenRuntimeConfiguration {

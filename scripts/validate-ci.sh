@@ -82,7 +82,7 @@ env -i \
   --allow-fs-write="$CI_TEST_TMPDIR" \
   --import="$ROOT/scripts/runtime-capability-guard.mjs" \
   --test-isolation=none \
-  --test dist/test/validation-capabilities.integration.test.js dist/test/external-transports.conformance.test.js dist/test/frozen-runtime-config.integration.test.js
+  --test dist/test/validation-capabilities.integration.test.js dist/test/external-transports.conformance.test.js dist/test/frozen-runtime-config.integration.test.js dist/test/reviewer-target.integration.test.js
 
 "$NPM_BIN" run test:conformance
 

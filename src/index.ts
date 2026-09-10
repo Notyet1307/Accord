@@ -73,7 +73,7 @@ export {
   type ResultArbitration,
 } from "./researcher-analyst.js";
 export {
-  FROZEN_RUNTIME_CONFIG_VERSION, CONFIG_BOUND_PROFILE_CONTEXT_VERSION, FROZEN_RUNTIME_CONFIG_MAX_BYTES, FROZEN_RUNTIME_POLICY,
+  FROZEN_RUNTIME_CONFIG_VERSION, CONFIG_BOUND_PROFILE_CONTEXT_VERSION, FROZEN_RUNTIME_CONFIG_MAX_BYTES, FROZEN_RUNTIME_POLICY, REVIEWER_TARGET_POLICY_VERSION,
   acceptRuntimeConfiguration, inspectRuntimeConfiguration, normalizeFrozenRuntimeConfiguration, parseFrozenRuntimeConfiguration, runtimeConfigurationDigest,
   type FrozenRuntimeConfiguration, type FrozenRuntimeConfigurationReference, type AcceptedFrozenRuntimeConfiguration,
 } from "./frozen-runtime-config.js";

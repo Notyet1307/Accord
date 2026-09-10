@@ -6,7 +6,7 @@ import {
   type AuditCorrelationId, type AuditEventId, type BoardEntryId,
 } from "./core/ids.js";
 import { readFixedProfileContext } from "./profile-context.js";
-import { reconstructGenericWinnerMaterialization, reconstructWinnerBoardEntries, type ExpectedRuntimeBoardEntry } from "./researcher-analyst.js";
+import { reconstructGenericWinnerMaterialization, reconstructWinnerBoardEntries, type ExpectedRuntimeBoardEntry, selectAnalystWinnerTarget, type PreparedProfileInvocation } from "./researcher-analyst.js";
 import type { DurableGenericMaterialization } from "./profile-runtime.js";
 import {
   PROFILE_CONTEXT_AUDIT_EVENT_KIND, PROFILE_CONTEXT_DECISION_VERSION, PROFILE_CONTEXT_REQUEST_VERSION,
@@ -23,7 +23,8 @@ const OPERATIONS: Record<ProfileContextOperation, true> = {
 };
 const REASONS: Record<ProfileContextDecisionReason, true> = {
   CURRENT_CONTEXT: true, CONTEXT_NOT_FOUND: true, CONTEXT_BINDING_MISMATCH: true, STALE_CONTEXT: true, TARGET_MISMATCH: true,
-  INCOMPLETE_CITED_GRAPH: true, ENTRY_OUTSIDE_CONTEXT: true, PROTECTED_RESOURCE: true, AUTHORITY_ESCALATION: true, OPERATION_NOT_ALLOWED: true,
+  REVIEW_TARGET_MISSING: true, REVIEW_TARGET_AMBIGUOUS: true, INCOMPLETE_CITED_GRAPH: true, ENTRY_OUTSIDE_CONTEXT: true,
+  PROTECTED_RESOURCE: true, AUTHORITY_ESCALATION: true, OPERATION_NOT_ALLOWED: true,
 };
 const ENTRY_TYPES: Record<ProfileContextEntryType, true> = { Proposal: true, Claim: true, Observation: true, EvidenceRef: true, Critique: true, VerificationResult: true };
 const PROTECTED: Partial<Record<ProfileContextOperation, true>> = { READ_CREDENTIALS: true, READ_HIDDEN_REASONING: true, READ_PRIVATE_RUNTIME_HISTORY: true, READ_UNRELATED_SOURCE: true };
@@ -43,6 +44,7 @@ const MAX_VIEW_BYTES = 2 * 1_024 * 1_024;
 const MAX_AUDIT_BYTES = 3 * 1_024 * 1_024;
 let savepointSequence = 0;
 type Row = Record<string, unknown>;
+type ProjectionRequest = Pick<ProfileContextDecisionRequest, "caseId" | "workflowRunId" | "boardId" | "boardRevision" | "workflowRevision" | "profile" | "context" | "target">;
 type LoadedEntry = Readonly<{ projected: ProjectedProfileContextEntry; basedOn: readonly string[]; sourceRefs: readonly string[]; createdRevision: number }>;
 type RequestIdentity = Readonly<{ requestId: string; correlationId: AuditCorrelationId }>;
 class ProjectionFailure extends Error { constructor(readonly reason: ProfileContextDecisionReason, message: string = reason) { super(message); } }
@@ -148,13 +150,26 @@ function loaded(row: Row, boardRevision: number): LoadedEntry {
     throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH", "persisted cited entry is invalid");
   }
 }
-function fetchEntry(database: DatabaseSync, id: BoardEntryId, request: ProfileContextDecisionRequest): LoadedEntry {
+function fetchEntry(database: DatabaseSync, id: BoardEntryId, request: ProjectionRequest): LoadedEntry {
   const row = database.prepare("SELECT * FROM board_entries WHERE board_entry_id = ? AND case_id = ? AND board_id = ?").get(id, request.caseId, request.boardId) as Row | undefined;
   if (row === undefined) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
   return loaded(row, request.boardRevision);
 }
-function exactTarget(database: DatabaseSync, request: ProfileContextDecisionRequest, selected: ReadonlyMap<string, string>): LoadedEntry {
+function exactTarget(database: DatabaseSync, request: ProjectionRequest, selected: ReadonlyMap<string, string>, profileVersion: string): LoadedEntry {
   if (request.target.caseId !== request.caseId || request.target.runId !== request.workflowRunId || request.target.boardId !== request.boardId || request.target.proposalBoardRevision > request.boardRevision) throw new ProjectionFailure("TARGET_MISMATCH");
+  if (profileVersion === "accord.reviewer/v2" || profileVersion === "accord.writer/v2") {
+    let target: ReviewerHandoffTarget;
+    try { target = selectAnalystWinnerTarget(database, request.caseId, request.workflowRunId, request.boardId); }
+    catch (error) {
+      const reason = error instanceof Error ? error.message : "TARGET_MISMATCH";
+      throw new ProjectionFailure(reason === "REVIEW_TARGET_MISSING" || reason === "REVIEW_TARGET_AMBIGUOUS" ? reason : "TARGET_MISMATCH");
+    }
+    if (json(target) !== json(request.target)) throw new ProjectionFailure("TARGET_MISMATCH");
+    const root = fetchEntry(database, target.proposalId, request);
+    if (root.projected.digest !== target.proposalDigest || selected.get(root.projected.id) !== root.projected.digest) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
+    return root;
+  }
+  if (profileVersion !== "accord.reviewer/v1" && profileVersion !== "accord.writer/v1") throw new ProjectionFailure("CONTEXT_BINDING_MISMATCH");
   const winners = database.prepare(`SELECT result.output_json, invocation.board_revision
     FROM runtime_results result
     JOIN runtime_result_arrivals arrival ON arrival.result_id = result.result_id AND arrival.outcome = 'WINNER'
@@ -175,13 +190,18 @@ function exactTarget(database: DatabaseSync, request: ProfileContextDecisionRequ
   if (root.projected.digest !== proposal.contentDigest || selected.get(root.projected.id) !== root.projected.digest) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
   return root;
 }
-function project(database: DatabaseSync, request: ProfileContextDecisionRequest, selected: ReadonlyMap<string, string>, profileVersion: string, outputSchema: string): ReviewerContextView | WriterContextBoundary {
-  const root = exactTarget(database, request, selected);
+function project(database: DatabaseSync, request: ProjectionRequest, selected: ReadonlyMap<string, string>, profileVersion: string, outputSchema: string): ReviewerContextView | WriterContextBoundary {
+  const root = exactTarget(database, request, selected, profileVersion);
   const byId = new Map<string, LoadedEntry>([[root.projected.id, root]]); const visiting = new Set<string>(); const visited = new Set<string>();
   const visit = (entry: LoadedEntry): void => {
     if (visiting.has(entry.projected.id)) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
     if (visited.has(entry.projected.id)) return;
     visiting.add(entry.projected.id);
+    if (profileVersion === "accord.reviewer/v2" || profileVersion === "accord.writer/v2") {
+      const row = database.prepare("SELECT * FROM board_entries WHERE board_entry_id = ?").get(entry.projected.id) as Row;
+      const immutable = { authorId: row["author_id"], authorType: row["author_type"], basedOn: entry.basedOn, contradicts: parsedJson(row["contradicts_json"], "contradicts", MAX_RELATION_JSON_BYTES), entryType: entry.projected.type, instructionAuthority: row["instruction_authority"], payload: entry.projected.payload, sourceRefs: entry.sourceRefs, status: row["status"], supersedes: parsedJson(row["supersedes_json"], "supersedes", MAX_RELATION_JSON_BYTES), trustLevel: row["trust_level"], visibility: row["visibility"] };
+      if (row["schema_version"] !== "accord.board-entry/v1" || sha(immutable) !== entry.projected.digest) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
+    }
     if (entry.projected.type === "EvidenceRef") {
       if (entry.basedOn.length !== 0 || entry.sourceRefs.length === 0 || entry.sourceRefs.some((reference) => !SOURCE_ID.test(reference))) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
     } else {
@@ -204,8 +224,10 @@ function project(database: DatabaseSync, request: ProfileContextDecisionRequest,
     visiting.delete(entry.projected.id); visited.add(entry.projected.id);
   };
   visit(root);
+  if (profileVersion === "accord.reviewer/v1" || profileVersion === "accord.writer/v1") {
   const plantedClaim = byId.get(root.basedOn[0] ?? "");
   if (json(root.projected.payload) !== json({ action: "Promise adoption.", supportStatus: "UNSUPPORTED" }) || root.basedOn.length !== 1 || root.sourceRefs.length !== 0 || plantedClaim?.projected.type !== "Claim" || json(plantedClaim.projected.payload) !== json({ statement: "Customer adoption is guaranteed.", unsupported: true }) || plantedClaim.basedOn.length !== 0 || plantedClaim.sourceRefs.length !== 0) throw new ProjectionFailure("TARGET_MISMATCH");
+  } else if (root.projected.type !== "Proposal" || root.basedOn.length === 0 || !root.basedOn.some((id) => byId.get(id)?.projected.type === "Claim" && byId.get(id)?.projected.payload["unsupported"] === true)) throw new ProjectionFailure("TARGET_MISMATCH");
   const reviewRows = database.prepare(`SELECT entry.*, result.result_id AS review_result_id, invocation.invocation_id AS review_invocation_id
     FROM board_entries entry
     JOIN runtime_result_entries link ON link.board_entry_id = entry.board_entry_id
@@ -226,6 +248,7 @@ function project(database: DatabaseSync, request: ProfileContextDecisionRequest,
       catch { throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH"); }
       materializations.set(invocationId, materialization);
     }
+    if (request.profile === "WRITER" && materialization?.profileVersion !== (profileVersion === "accord.writer/v2" ? "accord.reviewer/v2" : "accord.reviewer/v1")) throw new ProjectionFailure("CONTEXT_BINDING_MISMATCH");
     const exactEntry = materialization === undefined || materialization.resultId !== row["review_result_id"] ? undefined : materialization.boardEntries.find((candidate) => candidate.entryId === entry.projected.id);
     if (exactEntry === undefined || exactEntry.entryType !== entry.projected.type || exactEntry.contentDigest !== entry.projected.digest || json(exactEntry.payload) !== json(entry.projected.payload) || json(exactEntry.basedOn) !== json(entry.basedOn) || json(exactEntry.sourceRefs) !== json(entry.sourceRefs)) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
     relevant.push(entry);
@@ -238,6 +261,15 @@ function project(database: DatabaseSync, request: ProfileContextDecisionRequest,
   if (Buffer.byteLength(json(view), "utf8") > MAX_VIEW_BYTES) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
   return view;
 }
+/** Internal authority projection; callers enforce freshness or historical recovery as appropriate. */
+export function projectPreparedProfileTarget(database: DatabaseSync, prepared: PreparedProfileInvocation, target: ReviewerHandoffTarget): ReviewerContextView | WriterContextBoundary {
+  if (prepared.profile !== "REVIEWER" && prepared.profile !== "WRITER") throw new TypeError("target projection requires Reviewer or Writer");
+  if (prepared.entries.length > MAX_SELECTED_ENTRIES) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
+  const selected = new Map(prepared.entries.map((entry) => [entry.id, entry.digest]));
+  if (selected.size !== prepared.entries.length) throw new ProjectionFailure("INCOMPLETE_CITED_GRAPH");
+  return project(database, { ...prepared, profile: prepared.profile, context: { invocationId: prepared.invocationId, contextId: prepared.contextId, contextDigest: prepared.contextDigest }, target }, selected, prepared.profileVersion, prepared.outputSchema);
+}
+
 function append(database: DatabaseSync, request: ProfileContextDecisionRequest, fingerprint: string, identity: RequestIdentity, reason: ProfileContextDecisionReason, value: ProfileContextDecisionValue | null): ProfileContextDecision {
   const outcome = value === null ? "DENY" : "ALLOW";
   if ((outcome === "ALLOW") !== (reason === "CURRENT_CONTEXT")) throw new Error("Profile Context decision disposition is invalid");
