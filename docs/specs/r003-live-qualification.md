@@ -40,3 +40,7 @@ Acceptance：可信 launcher 实际退出0及299个离线测试；真实官方 A
 ## 首次真实运行发现的兼容性修复
 
 2026-09-10 首次真实连接已创建一条追问，Accord 尚无模型 Attempt。C5 将 Node socket.write 的成功回调 `null` 误判为 MAGICCHAT_SEND_FAILED；原 fake 只返回 undefined，未覆盖真实回调契约。新增可复现红测试后，将共享发送错误判断改为同时接受 undefined/null 成功，仅非空 error 触发失败。没有修改请求 identity、数据库、重试策略或 TLS。修复提交需重新跑可信 qualification；先前 5e69f02 的证据只归原提交。恢复使用原 database/config/App/Case 和原请求 ID，由官方服务去重确认，禁止发出新的追问 identity。
+
+## 显式 UNKNOWN 重试与诊断
+
+2026-09-10 用户确认授权原 Researcher UNKNOWN 一次显式重试及脱敏诊断。原 Attempt `attempt_37cec0c84ca9a4b468b1776c1095cb615ca358123bd8f55f55d72c86671195b6`；保留原 Case/config/model/window，通过 Driver --retry-unknown 接受第二 Attempt，禁止自动第三次调用。Driver 仅报告固定白名单内的 provider 错误码，不输出任意异常文本、响应内容或凭据；诊断不改变 UNKNOWN 与结果晋升规则。HTTP 诊断仅记录状态码、固定网络错误码和有无 request-id，不记录响应 body。

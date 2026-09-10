@@ -100,6 +100,8 @@ test("Driver serial four profiles, stable human waits, restart and unique public
 
 test("Driver UNKNOWN default stops; explicit retry acceptance is atomic, replayable and bounded", async (t) => {
   const f = fixture(t); f.fail(); const first = f.start(); await f.intake(); assert.equal((await first.done).state, "UNKNOWN");
+  assert.ok(f.states.includes("PROVIDER_TRANSPORT_ERROR"));
+  assert.ok(!JSON.stringify(f.states).includes("provider-canary-driver"));
   f.reopen(); assert.equal((await f.start().done).state, "UNKNOWN"); assert.equal(f.calls.length, 1);
   const work = f.authority.inspectDriverWork(appId)!; const attempt = work.attempts[0]!.attemptId;
   f.raw.exec("CREATE TRIGGER reject_retry BEFORE INSERT ON audit_events WHEN NEW.event_kind LIKE 'UNKNOWN_RETRY_AUTHORIZED:%' BEGIN SELECT RAISE(ABORT, 'rollback'); END");

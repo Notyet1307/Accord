@@ -19,6 +19,8 @@ export interface DriverResult {
 }
 const SAFE_REASONS = new Set(["CONFIG_UNBOUND", "REVIEW_TARGET_MISSING", "REVIEW_TARGET_AMBIGUOUS", "TARGET_MISMATCH", "CONFIG_MISMATCH", "CONFIG_WINDOW_EXPIRED", "CONFIG_WINDOW_NOT_STARTED", "UNKNOWN_RETRY_NOT_ELIGIBLE", "DRIVER_CASE_AMBIGUOUS", "DRIVER_APP_MISMATCH", "DRIVER_INVOCATION_AMBIGUOUS", "MAGICCHAT_RPC_TIMEOUT", "MAGICCHAT_CONNECTION_CLOSED", "MAGICCHAT_ABORTED"]);
 
+const SAFE_PROVIDER_DIAGNOSTICS = new Set(["PROVIDER_RESPONSE_TOO_LARGE", "PROVIDER_RESPONSE_INVALID", "PROVIDER_MODEL_IDENTITY_MISMATCH", "PROVIDER_IDENTITY_INVALID", "PROVIDER_USAGE_INVALID", "PROVIDER_WIRE_TOO_LARGE", "PROVIDER_TIMEOUT", "PROVIDER_ABORTED", "PROVIDER_CREDENTIAL_REFLECTION", "PROVIDER_TRANSPORT_ERROR"]);
+
 /** One event-driven coordinator; the caller owns the database and supplies explicitly bound I/O. */
 export async function runR003Driver(options: {
   authority: AuthorityDatabase; configuration: FrozenRuntimeConfiguration; ports: DriverPorts;
@@ -121,6 +123,7 @@ export async function runR003Driver(options: {
     }
     return result("STOPPED", stopReason ?? "STOP_REQUESTED");
   } catch (error) {
+    if (error instanceof Error && SAFE_PROVIDER_DIAGNOSTICS.has(error.message)) report(error.message);
     if (stopReason !== undefined) return result("STOPPED", stopReason);
     try { if (authority.inspectDriverWork(config.magicChat.appId)?.invocationStatus === "UNKNOWN") return result("UNKNOWN", "EXPLICIT_RETRY_REQUIRED"); } catch { /* Preserve the original bounded failure if authority cannot be reconstructed. */ }
     return result("FAILED", error instanceof Error && SAFE_REASONS.has(error.message) ? error.message : "DRIVER_AUTHORITY_OR_TRANSPORT_REJECTED");
