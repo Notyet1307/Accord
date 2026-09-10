@@ -44,3 +44,9 @@ Acceptance：可信 launcher 实际退出0及299个离线测试；真实官方 A
 ## 显式 UNKNOWN 重试与诊断
 
 2026-09-10 用户确认授权原 Researcher UNKNOWN 一次显式重试及脱敏诊断。原 Attempt `attempt_37cec0c84ca9a4b468b1776c1095cb615ca358123bd8f55f55d72c86671195b6`；保留原 Case/config/model/window，通过 Driver --retry-unknown 接受第二 Attempt，禁止自动第三次调用。Driver 仅报告固定白名单内的 provider 错误码，不输出任意异常文本、响应内容或凭据；诊断不改变 UNKNOWN 与结果晋升规则。HTTP 诊断仅记录状态码、固定网络错误码和有无 request-id，不记录响应 body。
+
+## Grok 独立联调执行
+
+2026-09-10 用户要求「换一个 grok试试呢」，grok-4.6 最小非流式 Responses 探测返回 HTTP 200/completed/OK 后，用户要求「继续」，授权新独立四角色合成联调。旧 gpt-5.6-sol Case/两次 UNKNOWN/FAILED 保留，不复活、不覆盖；Grok 新 App `f8b71be3-0457-4f99-92a1-3a3d1285009e`、Conversation `6ab0d1a5-8f34-44c4-b343-33a0ded32517`、独立数据库 `/Users/yet/.local/share/accord-live/grok/case.sqlite`。四角色统一 grok-4.6，仍为同一用户指定 provider/端点；四次初始调用，无自动重试，UNKNOWN 停止。
+
+新配置 `/Users/yet/.local/share/accord-live/grok/config.json`，SHA-256 `b66560547759d7300dd870af1cfe72eea02c084085cb10efd31266ff5b65f2f3`，窗口 `2026-09-10T04:04:10.447Z` 至 `2026-09-10T04:50:10.447Z`。指令按现有实际契约修正 REVIEWER 枚举 INCONCLUSIVE_VERIFICATION，明确 WRITER 的 context.bases；没有更改代码接受契约或注入角色结果。复用 localhost 服务/证书及独立 test user，新 App secret 位于 grok/credentials.json (0600)。沿用同一合成输入/追问答案，Approval 仍须实际用户在 MagicChat 点击。脱敏 HTTP 诊断 preload 仅用于 operator 日志，不修改请求/响应/重试。
