@@ -1,3 +1,4 @@
+import { inspectRunRuntimeConfiguration } from "../frozen-runtime-config.js";
 import {
   RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_SHA256,
   RESEARCHER_ANALYST_OPAQUE_COMPLETION_RECEIPT_MIGRATION_SCHEMA_FINGERPRINT,
@@ -44,7 +45,7 @@ import {
   type ResultId,
   type WorkflowRunId,
 } from "../core/ids.js";
-import { reconstructWinnerBoardEntries } from "../researcher-analyst.js";
+import { reconstructWinnerBoardEntries, selectAnalystWinnerTarget, type ExpectedRuntimeBoardEntry } from "../researcher-analyst.js";
 
 export const RESEARCHER_ANALYST_HANDOFF_VERSION = "accord.r003-researcher-analyst-handoff/v1" as const;
 /** Exact schema-8 contract-version snapshot; later registry additions stay out of this frozen handoff. */
@@ -232,18 +233,28 @@ export function generateR003ResearcherAnalystHandoff(database: DatabaseSync, per
   const entriesById = new Map<BoardEntryId, PersistedBoardEntry>(entries.map((entry) => [entry.board_entry_id, entry]));
   for (const expected of expectedWinnerEntries) {
     const actual = entriesById.get(expected.entryId);
-    if (actual === undefined || actual["entry_type"] !== expected.type || actual["content_digest"] !== expected.contentDigest || numberField(actual, "created_revision") !== numberField(analystInvocation, "board_revision") + 1) throw new Error("persisted Analyst winner Board graph does not match its derived identities and digests");
+    if (actual === undefined || actual["entry_type"] !== expected.type || actual["content_digest"] !== expected.contentDigest || actual["payload_json"] !== JSON.stringify(expected.payload) || actual["based_on_json"] !== JSON.stringify(expected.basedOn) || actual["source_refs_json"] !== JSON.stringify(expected.sourceRefs) || numberField(actual, "created_revision") !== numberField(analystInvocation, "board_revision") + 1) throw new Error("persisted Analyst winner Board graph does not match its derived identities and relations");
   }
-  const plantedClaims = expectedWinnerEntries.filter((entry) => entry.type === "Claim" && entry.payload["statement"] === "Customer adoption is guaranteed." && entry.payload["unsupported"] === true && entry.basedOn.length === 0);
-  if (plantedClaims.length !== 1) throw new Error("persisted Analyst winner lacks exactly one frozen unsupported Claim");
-  const plantedClaim = plantedClaims[0]!;
-  const plantedProposals = expectedWinnerEntries.filter((entry) => entry.type === "Proposal" && entry.payload["action"] === "Promise adoption." && entry.payload["supportStatus"] === "UNSUPPORTED" && entry.basedOn.length === 1 && entry.basedOn[0] === plantedClaim.entryId);
-  if (plantedProposals.length !== 1) throw new Error("persisted Analyst winner lacks exactly one frozen unsupported Proposal");
-  const plantedProposal = plantedProposals[0]!;
-  if (!linkedWinnerEntryIds.has(plantedClaim.entryId) || !linkedWinnerEntryIds.has(plantedProposal.entryId)) throw new Error("persisted candidate Proposal graph is not linked to the exact Analyst winner");
-  const proposal = entriesById.get(plantedProposal.entryId);
-  if (proposal === undefined || proposal["content_digest"] !== plantedProposal.contentDigest || proposal["entry_type"] !== "Proposal" || numberField(proposal, "created_revision") !== numberField(analystInvocation, "board_revision") + 1 || numberField(board, "revision") < numberField(proposal, "created_revision")) throw new Error("persisted candidate Proposal is not at the exact Analyst winner Board revision");
-  const proposalId = plantedProposal.entryId;
+  const bound = inspectRunRuntimeConfiguration(database, analystInvocation.workflow_run_id);
+  const reviewerVersion = bound?.configuration.profiles.REVIEWER.profileVersion ?? "accord.reviewer/v1";
+  const reviewerInvocations = all("SELECT profile_version FROM runtime_invocations WHERE case_id = ? AND workflow_run_id = ? AND node_id = 'REVIEWER'", persistedCaseId, analystInvocation.workflow_run_id);
+  if (reviewerInvocations.some((invocation) => invocation["profile_version"] !== reviewerVersion)) throw new Error("CONFIG_PROFILE_MISMATCH");
+  let proposalCandidate: ExpectedRuntimeBoardEntry;
+  if (reviewerVersion === "accord.reviewer/v2") {
+    const target = selectAnalystWinnerTarget(database, persistedCaseId, analystInvocation.workflow_run_id, analystInvocation.board_id);
+    const selected = expectedWinnerEntries.find((entry) => entry.entryId === target.proposalId);
+    if (selected === undefined) throw new Error("TARGET_MISMATCH");
+    proposalCandidate = selected;
+  } else {
+    const claims = expectedWinnerEntries.filter((entry) => entry.type === "Claim" && entry.payload["statement"] === "Customer adoption is guaranteed." && entry.payload["unsupported"] === true && entry.basedOn.length === 0);
+    const fixed = expectedWinnerEntries.filter((entry) => entry.type === "Proposal" && entry.payload["action"] === "Promise adoption." && entry.payload["supportStatus"] === "UNSUPPORTED" && entry.basedOn.length === 1 && entry.basedOn[0] === claims[0]?.entryId);
+    if (claims.length !== 1 || fixed.length !== 1) throw new Error("TARGET_MISMATCH");
+    proposalCandidate = fixed[0]!;
+  }
+  if (!linkedWinnerEntryIds.has(proposalCandidate.entryId)) throw new Error("persisted candidate Proposal graph is not linked to the exact Analyst winner");
+  const proposal = entriesById.get(proposalCandidate.entryId);
+  if (proposal === undefined || proposal["content_digest"] !== proposalCandidate.contentDigest || proposal["entry_type"] !== "Proposal" || numberField(proposal, "created_revision") !== numberField(analystInvocation, "board_revision") + 1 || numberField(board, "revision") < numberField(proposal, "created_revision")) throw new Error("persisted candidate Proposal is not at the exact Analyst winner Board revision");
+  const proposalId = proposalCandidate.entryId;
   const analystContext = analyst.context; const researcherContext = researcher.context;
   if (analystContext["provider_port_version"] !== researcherContext["provider_port_version"] || analystContext["runtime_version"] !== researcherContext["runtime_version"]) throw new Error("persisted Case has inconsistent Profile versions");
   const reviewerTarget: ReviewerHandoffTarget = Object.freeze({

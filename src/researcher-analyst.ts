@@ -43,7 +43,7 @@ import {
   type ResponseId,
   type SourceId,
 } from "./core/ids.js";
-import { persistFixedProfileContext, REVIEWER_OUTPUT_SCHEMA, REVIEWER_PROFILE_VERSION, WRITER_OUTPUT_SCHEMA, WRITER_PROFILE_VERSION } from "./profile-context.js";
+import { persistFixedProfileContext, REVIEWER_OUTPUT_SCHEMA, REVIEWER_PROFILE_VERSION, REVIEWER_V2_PROFILE_VERSION, WRITER_OUTPUT_SCHEMA, WRITER_PROFILE_VERSION, WRITER_V2_PROFILE_VERSION } from "./profile-context.js";
 import {
   assertInvocationBoundOutputContract,
   deriveDurableGenericMaterialization,
@@ -55,6 +55,8 @@ import {
   type GenericMaterializationCandidate,
   type InvocationBoundOutputContract,
 } from "./profile-runtime.js";
+import { projectPreparedProfileTarget } from "./reviewer-context.js";
+import type { ReviewerHandoffTarget } from "./contracts/researcher-analyst-handoff.js";
 import { persistWriterArtifact } from "./writer-artifact.js";
 import { parseReviewerDispositionHandoff } from "./reviewer-disposition.js";
 import type { ReviewerDispositionHandoff } from "./contracts/reviewer-disposition.js";
@@ -120,6 +122,7 @@ export type ProviderResultArbitration = ResultArbitration | ContractRejection;
 const permissions = Object.freeze({ canCreateApproval: false, canMutateEntries: false, canPublish: false, canSetSystemVerification: false, canUseTools: false, sourceInstructionAuthority: false });
 const providerMetadataFields = ["deploymentId", "modelId", "providerPortVersion", "requestId", "responseId"] as const;
 const GENERIC_AUDIT_JSON_MAX_CHARS = 524_288;
+const MAX_WINNER_OUTPUT_BYTES = 256 * 1024;
 
 function canonical(value: unknown): unknown { if (Array.isArray(value)) return value.map(canonical); if (value !== null && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(Reflect.get(value, key))])); return value; }
 function digest(value: unknown): string { return createHash("sha256").update(JSON.stringify(canonical(value)), "utf8").digest("hex"); }
@@ -145,7 +148,7 @@ function transaction<Result>(database: DatabaseSync, operation: () => Result): R
     throw error;
   }
 }
-function profileDetails(profile: Profile) { if (profile === "RESEARCHER") return { node: "RESEARCHER", profileVersion: RESEARCHER_PROFILE_VERSION, outputSchema: RESEARCHER_OUTPUT_SCHEMA } as const; if (profile === "ANALYST") return { node: "ANALYST", profileVersion: ANALYST_PROFILE_VERSION, outputSchema: ANALYST_OUTPUT_SCHEMA } as const; if (profile === "REVIEWER") return { node: "REVIEWER", profileVersion: REVIEWER_PROFILE_VERSION, outputSchema: REVIEWER_OUTPUT_SCHEMA } as const; return { node: "WRITER", profileVersion: WRITER_PROFILE_VERSION, outputSchema: WRITER_OUTPUT_SCHEMA } as const; }
+function profileDetails(profile: Profile, version?: string) { if (profile === "RESEARCHER") return { node: "RESEARCHER", profileVersion: RESEARCHER_PROFILE_VERSION, outputSchema: RESEARCHER_OUTPUT_SCHEMA } as const; if (profile === "ANALYST") return { node: "ANALYST", profileVersion: ANALYST_PROFILE_VERSION, outputSchema: ANALYST_OUTPUT_SCHEMA } as const; if (profile === "REVIEWER") return { node: "REVIEWER", profileVersion: version === REVIEWER_V2_PROFILE_VERSION ? REVIEWER_V2_PROFILE_VERSION : REVIEWER_PROFILE_VERSION, outputSchema: REVIEWER_OUTPUT_SCHEMA } as const; return { node: "WRITER", profileVersion: version === WRITER_V2_PROFILE_VERSION ? WRITER_V2_PROFILE_VERSION : WRITER_PROFILE_VERSION, outputSchema: WRITER_OUTPUT_SCHEMA } as const; }
 function parseEntry(row: Record<string, unknown>): ContextEntry { const type = string(row["entry_type"], "entry type", 32) as EntryType; return Object.freeze({ digest: string(row["content_digest"], "entry digest", 64), id: parseBoardEntryId(row["board_entry_id"]), payload: Object.freeze(JSON.parse(string(row["payload_json"], "entry payload", 16_384)) as Record<string, unknown>), type }); }
 function source(value: ApprovedSyntheticSource): Readonly<ApprovedSyntheticSource> { const checked = record(value, "approved source"); exact(checked, ["content", "locator", "observedAt", "sourceId", "sourceKind"], "approved source"); return Object.freeze({ content: string(checked["content"], "source content"), locator: string(checked["locator"], "source locator", 512), observedAt: instant(checked["observedAt"], "source observedAt"), sourceId: parseSourceId(checked["sourceId"]), sourceKind: string(checked["sourceKind"], "sourceKind", 80) }); }
 function sourceReference(item: Readonly<ApprovedSyntheticSource>) { return { locator: item.locator, observedAt: item.observedAt, sourceDigest: digest(item.content), sourceId: item.sourceId, sourceKind: item.sourceKind }; }
@@ -201,8 +204,8 @@ function persistedObjective(value: unknown, profile: Profile): string {
   return string(value, "persisted objective");
 }
 
-function makePrepared(input: { readonly configuration?: FrozenRuntimeConfigurationReference; readonly instructions?: string; readonly approvedSources: readonly Readonly<ApprovedSyntheticSource>[]; readonly boardId: BoardId; readonly boardRevision: number; readonly caseId: CaseId; readonly entries: readonly ContextEntry[]; readonly modelId: string; readonly objective: string; readonly profile: Profile; readonly workflowRevision: number; readonly workflowRunId: WorkflowRunId; }): PreparedProfileInvocation {
-  const details = profileDetails(input.profile);
+function makePrepared(input: { readonly configuration?: FrozenRuntimeConfigurationReference; readonly instructions?: string; readonly approvedSources: readonly Readonly<ApprovedSyntheticSource>[]; readonly boardId: BoardId; readonly boardRevision: number; readonly caseId: CaseId; readonly entries: readonly ContextEntry[]; readonly modelId: string; readonly objective: string; readonly profile: Profile; readonly profileVersion?: string; readonly workflowRevision: number; readonly workflowRunId: WorkflowRunId; }): PreparedProfileInvocation {
+  const details = profileDetails(input.profile, input.profileVersion);
   const configured = input.configuration === undefined ? {} : input.instructions === undefined ? { configuration: input.configuration } : { configuration: input.configuration, instructions: input.instructions };
   const contextCore = { approvedSources: input.approvedSources.map(sourceReference), boardId: input.boardId, boardRevision: input.boardRevision, caseId: input.caseId, entries: input.entries.map((entry) => ({ digest: entry.digest, id: entry.id, payload: entry.payload, type: entry.type })), modelId: input.modelId, node: details.node, objective: input.objective, outputSchema: details.outputSchema, permissionSummary: permissions, profileVersion: details.profileVersion, providerPortVersion: NATIVE_BAIZHI_PROVIDER_PORT_VERSION, runtimeVersion: RUNTIME_VERSION, workflowDefinitionId: FIXED_WORKFLOW_DEFINITION_ID, workflowDefinitionVersion: FIXED_WORKFLOW_DEFINITION, workflowRevision: input.workflowRevision, workflowRunId: input.workflowRunId };
   const contextDigest = digest(input.configuration === undefined ? contextCore : { ...contextCore, configuration: input.configuration, schemaVersion: CONFIG_BOUND_PROFILE_CONTEXT_VERSION });
@@ -225,17 +228,18 @@ function contextFrom(database: DatabaseSync, input: unknown, configuration?: Fro
   const request = normalizeProfileInvocationRequest(input);
   const rawCaseId = request.caseId; const now = request.now; const profile = request.profile;
   const modelId = request.modelId;
-  const details = profileDetails(profile);
   const state = one(database, `SELECT c.case_id, c.objective, c.status, b.board_id, b.revision AS board_revision, w.workflow_run_id, w.revision AS workflow_revision, w.state, w.workflow_definition_id, d.definition_version FROM cases c JOIN boards b ON b.case_id = c.case_id JOIN workflow_runs w ON w.case_id = c.case_id JOIN workflow_definitions d ON d.workflow_definition_id = w.workflow_definition_id WHERE c.case_id = ?`, rawCaseId);
-  if (state === undefined) throw new Error("Case does not exist"); if (state["state"] !== details.node || state["workflow_definition_id"] !== FIXED_WORKFLOW_DEFINITION_ID || state["definition_version"] !== FIXED_WORKFLOW_DEFINITION) throw new Error("Profile cannot run outside the fixed current Workflow node"); if (state["status"] !== "OPEN") throw new Error("Profile cannot run on a terminal Case");
+  if (state === undefined) throw new Error("Case does not exist"); if (state["state"] !== profile || state["workflow_definition_id"] !== FIXED_WORKFLOW_DEFINITION_ID || state["definition_version"] !== FIXED_WORKFLOW_DEFINITION) throw new Error("Profile cannot run outside the fixed current Workflow node"); if (state["status"] !== "OPEN") throw new Error("Profile cannot run on a terminal Case");
   const caseId = parseCaseId(state["case_id"]); if (caseId !== rawCaseId) throw new Error("persisted Case identity is invalid"); const boardId = parseBoardId(state["board_id"]); const workflowRunId = parseWorkflowRunId(state["workflow_run_id"]); const caseObjective = string(state["objective"], "objective"); const objective = profile === "RESEARCHER" ? caseObjective : ""; const boardRevision = state["board_revision"]; const workflowRevision = state["workflow_revision"];
   if (!Number.isSafeInteger(boardRevision) || !Number.isSafeInteger(workflowRevision)) throw new TypeError("persisted revisions are invalid"); const persistedBoardRevision = boardRevision as number; const persistedWorkflowRevision = workflowRevision as number;
   const bound = configuration === undefined ? undefined : requireRuntimeConfiguration(database, configuration);
   if (bound === undefined && inspectRunRuntimeConfiguration(database, workflowRunId) !== undefined) throw new Error("CONFIG_REFERENCE_REQUIRED");
+  const details = profileDetails(profile, bound?.configuration.profiles[profile].profileVersion);
   if (bound !== undefined) {
     assertRuntimeConfigurationWindow(bound.configuration, now);
     assertRuntimeConfigurationSource(database, bound.configuration);
     if (bound.configuration.profiles[profile].modelId !== modelId) throw new Error("CONFIG_MODEL_MISMATCH");
+    if ( bound.configuration.profiles[profile].profileVersion !== details.profileVersion || bound.configuration.profiles[profile].outputSchema !== details.outputSchema) throw new Error("CONFIG_PROFILE_MISMATCH");
     bindRunRuntimeConfiguration(database, workflowRunId, caseId, bound.reference, now);
   }
   const configured = bound === undefined ? {} : { configuration: bound.reference, instructions: bound.configuration.profiles[profile].instructions };
@@ -262,7 +266,8 @@ function contextFrom(database: DatabaseSync, input: unknown, configuration?: Fro
           WHERE case_id = ? AND created_revision <= ? AND status IN ('CANDIDATE', 'ACCEPTED') AND visibility = 'CASE' AND instruction_authority = 'NONE'
           ORDER BY created_revision, board_entry_id`, caseId, persistedBoardRevision).map(parseEntry);
   const approvedSources = profile === "RESEARCHER" ? resolveApprovedSources(database) : Object.freeze([]);
-  const prepared = makePrepared({ ...configured, approvedSources, boardId, boardRevision: persistedBoardRevision, caseId, entries, modelId, objective, profile, workflowRevision: persistedWorkflowRevision, workflowRunId });
+  const prepared = makePrepared({ ...configured, approvedSources, boardId, boardRevision: persistedBoardRevision, caseId, entries, modelId, objective, profile, profileVersion: details.profileVersion, workflowRevision: persistedWorkflowRevision, workflowRunId });
+  if (profile === "REVIEWER" && details.profileVersion === REVIEWER_V2_PROFILE_VERSION) projectPreparedProfileTarget(database, prepared, selectAnalystWinnerTarget(database, caseId, workflowRunId, boardId));
   const fixedContext = profile === "REVIEWER" || profile === "WRITER" ? {
     invocationId: prepared.invocationId, caseId, workflowRunId: prepared.workflowRunId, boardId, nodeId: profile,
     ...(bound === undefined ? {} : { configuration: bound.reference }),
@@ -301,7 +306,7 @@ function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown
   const context = one(database, "SELECT * FROM profile_contexts WHERE invocation_id = ?", invocationId); const invocation = one(database, "SELECT * FROM runtime_invocations WHERE invocation_id = ?", invocationId);
   if (context === undefined || invocation === undefined) throw new Error("provider result has no persisted Invocation context");
   const profile = context["node_id"] === "RESEARCHER" ? "RESEARCHER" : context["node_id"] === "ANALYST" ? "ANALYST" : context["node_id"] === "REVIEWER" ? "REVIEWER" : context["node_id"] === "WRITER" ? "WRITER" : (() => { throw new Error("persisted Invocation has an unsupported Profile"); })();
-  const details = profileDetails(profile);
+  const details = profileDetails(profile, String(context["profile_version"]));
   const caseId = parseCaseId(context["case_id"]);
   const boardId = parseBoardId(context["board_id"]);
   const workflowRunId = parseWorkflowRunId(context["workflow_run_id"]);
@@ -311,6 +316,7 @@ function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown
   if (bound !== undefined) {
     assertRuntimeConfigurationSource(database, bound.configuration);
     if (bound.configuration.profiles[profile].modelId !== modelId) throw new Error("CONFIG_MODEL_MISMATCH");
+    if ( bound.configuration.profiles[profile].profileVersion !== context["profile_version"] || bound.configuration.profiles[profile].outputSchema !== context["output_schema"]) throw new Error("CONFIG_PROFILE_MISMATCH");
   }
   const caseRow = one(database, "SELECT objective FROM cases WHERE case_id = ?", caseId);
   if (
@@ -369,9 +375,8 @@ function canonicalPrepared(database: DatabaseSync, suppliedInvocationId: unknown
     const manifest = one(database, "SELECT source_kind, locator, content, content_digest, observed_at FROM approved_synthetic_sources WHERE source_id = ?", approved.sourceId);
     if (manifest === undefined || manifest["source_kind"] !== approved.sourceKind || manifest["locator"] !== approved.locator || manifest["content"] !== approved.content || manifest["content_digest"] !== digest(approved.content) || manifest["observed_at"] !== approved.observedAt) throw new Error("persisted Invocation source does not re-derive from the frozen manifest");
   }
-  const permissionSummary = parseJson(context["permission_summary_json"], "persisted permission summary");
-  if (context["permission_summary_json"] !== json(permissions) || json(permissionSummary) !== json(permissions)) throw new Error("persisted permission summary is not the exact deny-all contract");
-  const prepared = makePrepared({ ...(bound === undefined ? {} : { configuration: bound.reference, instructions: bound.configuration.profiles[profile].instructions }), approvedSources, boardId, boardRevision: boardRevision as number, caseId, entries, modelId, objective, profile, workflowRevision: workflowRevision as number, workflowRunId });
+  const permissionSummary = parseJson(context["permission_summary_json"], "persisted permission summary"); if (context["permission_summary_json"] !== json(permissions) || json(permissionSummary) !== json(permissions)) throw new Error("persisted permission summary is not the exact deny-all contract");
+  const prepared = makePrepared({ ...(bound === undefined ? {} : { configuration: bound.reference, instructions: bound.configuration.profiles[profile].instructions }), approvedSources, boardId, boardRevision: boardRevision as number, caseId, entries, modelId, objective, profile, profileVersion: details.profileVersion, workflowRevision: workflowRevision as number, workflowRunId });
   if (prepared.contextId !== context["context_id"] || prepared.contextDigest !== hexDigest(context["context_digest"], "persisted context digest") || prepared.invocationId !== invocationId) throw new Error("persisted Invocation context is invalid");
   if (invocation["case_id"] !== prepared.caseId || invocation["workflow_run_id"] !== prepared.workflowRunId || invocation["board_id"] !== prepared.boardId || invocation["node_id"] !== prepared.profile || invocation["profile_version"] !== prepared.profileVersion || invocation["model_id"] !== prepared.modelId || invocation["workflow_revision"] !== prepared.workflowRevision || invocation["board_revision"] !== prepared.boardRevision || invocation["context_digest"] !== prepared.contextDigest) throw new Error("persisted Invocation identity tuple is inconsistent");
   return prepared;
@@ -512,7 +517,7 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
         }
         const expectedDetails = delivery["schema_version"] === "accord.runtime-provider-delivery/v1"
           ? [json({ arrivalId: linkedArrivalId, attemptId, outcome: linkedArrival["outcome"], recoveredFromSchema: 3, resultId: linkedArrival["result_id"] })]
-          : [runtimeResultArrivalAuditDetails({ arrivalId: linkedArrivalId, attemptId, outcome: string(linkedArrival["outcome"], "Arrival outcome", 32), prepared, rawResponseDigest: persistedDelivery.rawResponseDigest, replayableResponseJson: persistedDelivery.replayableResponseJson, ...(linkedResultId === undefined ? {} : { resultId: linkedResultId }), ...(materialization === undefined ? {} : { materialization }) })];
+          : [runtimeResultArrivalAuditDetails(database, { arrivalId: linkedArrivalId, attemptId, outcome: string(linkedArrival["outcome"], "Arrival outcome", 32), prepared, rawResponseDigest: persistedDelivery.rawResponseDigest, replayableResponseJson: persistedDelivery.replayableResponseJson, ...(linkedResultId === undefined ? {} : { resultId: linkedResultId }), ...(materialization === undefined ? {} : { materialization }) })];
         if (delivery["schema_version"] !== "accord.runtime-provider-delivery/v1" && linkedArrival["outcome"] === "INVALID") {
           const resultAudit = one(database, "SELECT provider_metadata_json, output_json, output_digest, usage_json FROM runtime_results WHERE result_id = ? AND invocation_id = ? AND attempt_id = ?", linkedArrival["result_id"] as string, invocationId, attemptId);
           const evidence = validateInvalidProviderAuditEvidenceAgainstCapsule(persistedDelivery.replayableResponseJson, prepared.modelId, persistedDelivery.rawResponseJson);
@@ -527,10 +532,10 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
                 const capsule = record(output, "legacy invalid Result capsule"); const deliveryCapsule = JSON.parse(persistedDelivery.rawResponseJson);
                 const evidence = validateInvalidProviderAuditEvidenceAgainstCapsule(persistedDelivery.replayableResponseJson, prepared.modelId, persistedDelivery.rawResponseJson);
                 if (outputDigest !== persistedDelivery.rawResponseDigest || capsule["kind"] !== "provider-response-redacted" || resultAudit["provider_metadata_json"] !== json(evidence.providerMetadata ?? {}) || resultAudit["usage_json"] !== json(evidence.usage ?? {}) || json(output) !== json(deliveryCapsule)) throw new Error("legacy invalid Result audit is invalid");
-                expectedDetails.push(runtimeResultArrivalAuditDetails({ arrivalId: linkedArrivalId, attemptId, outcome: "INVALID", prepared, rawResponseDigest: persistedDelivery.rawResponseDigest, replayableResponseJson: persistedDelivery.replayableResponseJson }));
+                expectedDetails.push(runtimeResultArrivalAuditDetails(database, { arrivalId: linkedArrivalId, attemptId, outcome: "INVALID", prepared, rawResponseDigest: persistedDelivery.rawResponseDigest, replayableResponseJson: persistedDelivery.replayableResponseJson }));
               } else {
                 if (digest(output) !== outputDigest) throw new Error("legacy winner output digest mismatch");
-                const providerMetadata = validateMetadata(JSON.parse(string(resultAudit["provider_metadata_json"], "legacy winner metadata", 100_000)), prepared.modelId); const usage = validateUsage(JSON.parse(string(resultAudit["usage_json"], "legacy winner usage", 100_000))); validation(prepared, output);
+                const providerMetadata = validateMetadata(JSON.parse(string(resultAudit["provider_metadata_json"], "legacy winner metadata", 100_000)), prepared.modelId); const usage = validateUsage(JSON.parse(string(resultAudit["usage_json"], "legacy winner usage", 100_000))); validation(database, prepared, output);
                 expectedDetails.push(json({ arrivalId: linkedArrivalId, attemptId, boardRevision: prepared.boardRevision, contextDigest: prepared.contextDigest, modelId: prepared.modelId, node: prepared.profile, objectiveDigest: digest(prepared.objective), outcome: linkedArrival["outcome"], outputDigest, outputSchema: prepared.outputSchema, profileVersion: prepared.profileVersion, providerMetadata, providerPortVersion: prepared.providerPortVersion, rawResponseDigest: persistedDelivery.rawResponseDigest, runtimeVersion: prepared.runtimeVersion, selectedEntries: prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id })), usage, workflowDefinitionId: FIXED_WORKFLOW_DEFINITION_ID, workflowDefinitionVersion: FIXED_WORKFLOW_DEFINITION, workflowRevision: prepared.workflowRevision }));
               }
             }
@@ -567,7 +572,7 @@ export function validatePersistedRuntimeAuthorityGraph(database: DatabaseSync): 
       let output: unknown; let envelope: Record<string, unknown>;
       try { output = JSON.parse(string(winner["output_json"], "winner output", 100_000)); envelope = record(JSON.parse(string(winner["raw_response_json"], "winner arrival", 100_000)), "winner arrival"); } catch { throw new Error("persisted runtime authority integrity failed: winner serialization is invalid"); }
       if (digest(output) !== winner["output_digest"] || envelope["envelopeDigest"] !== winner["raw_response_digest"]) throw new Error("persisted runtime authority integrity failed: winner digests are inconsistent");
-      if (prepared.profile === "RESEARCHER" || prepared.profile === "ANALYST") try { validation(prepared, output); } catch { throw new Error("persisted runtime authority integrity failed: winner output no longer satisfies its schema"); }
+      if (prepared.profile === "RESEARCHER" || prepared.profile === "ANALYST") try { validation(database, prepared, output); } catch { throw new Error("persisted runtime authority integrity failed: winner output no longer satisfies its schema"); }
       const response = one(database, "SELECT invocation_id, attempt_id, envelope_digest FROM runtime_physical_responses WHERE response_id = ?", winner["response_id"] as string);
       if (response === undefined || response["invocation_id"] !== invocationId || response["attempt_id"] !== winners[0]?.["attempt_id"] || response["envelope_digest"] !== winner["raw_response_digest"]) throw new Error("persisted runtime authority integrity failed: winner physical Response is inconsistent");
       const linked = rows(database, `SELECT entry.board_entry_id, entry.case_id, entry.board_id, entry.created_revision
@@ -775,16 +780,17 @@ export function beginPreparedAttempt(database: DatabaseSync, invocationId: Invoc
 }
 
 function researcherOutput(value: unknown, prepared: PreparedProfileInvocation): ResearcherOutput { const output = record(value, "Researcher output"); exact(output, ["evidenceRefs", "intents", "observations"], "Researcher output"); const parseItems = <T>(field: string, parser: (item: Record<string, unknown>) => T): readonly T[] => { const raw = output[field]; if (!Array.isArray(raw) || raw.length === 0 || raw.length > 16) throw new TypeError(`${field} must be a non-empty bounded array`); return Object.freeze(raw.map((item, index) => parser(record(item, `${field}[${index}]`)))); }; const contextIds = new Set(prepared.entries.map((entry) => entry.id)); const sources = new Map(prepared.approvedSources.map((item) => [item.sourceId, item])); const intents = parseItems("intents", (item) => { exact(item, ["basedOn", "objective", "scope"], "intent"); const basedOn = strings(item["basedOn"], "intent basedOn").map(parseBoardEntryId); if (!basedOn.every((entry) => contextIds.has(entry))) throw new TypeError("Intent relation leaves Researcher context"); return { basedOn, objective: string(item["objective"], "intent objective"), scope: string(item["scope"], "intent scope") }; }); const evidenceRefs = parseItems("evidenceRefs", (item) => { exact(item, ["locator", "observedAt", "sourceDigest", "sourceId", "sourceKind"], "EvidenceRef"); const sourceId = parseSourceId(item["sourceId"]); const approved = sources.get(sourceId); if (approved === undefined || item["sourceKind"] !== approved.sourceKind || item["locator"] !== approved.locator || item["sourceDigest"] !== digest(approved.content) || item["observedAt"] !== approved.observedAt) throw new TypeError("EvidenceRef must exactly reference an approved synthetic source"); return sourceReference(approved); }); const emittedSources = new Set<SourceId>(evidenceRefs.map((item) => item.sourceId)); if (emittedSources.size !== evidenceRefs.length) throw new TypeError("EvidenceRef source IDs must be unique"); const observations = parseItems("observations", (item) => { exact(item, ["basedOn", "sourceRefs", "statement"], "observation"); const basedOn = strings(item["basedOn"], "observation basedOn").map(parseBoardEntryId); const sourceRefs = strings(item["sourceRefs"], "observation sourceRefs").map(parseSourceId); if (basedOn.length + sourceRefs.length === 0 || !basedOn.every((entry) => contextIds.has(entry)) || !sourceRefs.every((ref) => emittedSources.has(ref))) throw new TypeError("Observation source references must resolve through this Researcher output's EvidenceRefs"); return { basedOn, sourceRefs, statement: string(item["statement"], "observation statement") }; }); return { evidenceRefs, intents, observations }; }
-function analystOutput(value: unknown, prepared: PreparedProfileInvocation): AnalystOutput { const output = record(value, "Analyst output"); exact(output, ["claims", "proposals"], "Analyst output"); const rawClaims = output["claims"]; const rawProposals = output["proposals"]; if (!Array.isArray(rawClaims) || !Array.isArray(rawProposals) || rawClaims.length === 0 || rawProposals.length === 0 || rawClaims.length > 16 || rawProposals.length > 16) throw new TypeError("Analyst output requires bounded claims and proposals"); const allowed = new Set(prepared.entries.filter((entry) => entry.type === "EvidenceRef" || entry.type === "Observation").map((entry) => entry.id)); const claims = rawClaims.map((raw, index) => { const item = record(raw, `claim[${index}]`); exact(item, ["statement", "supportingEntryIds", "unsupported"], "claim"); const supportingEntryIds = strings(item["supportingEntryIds"], "claim supportingEntryIds").map(parseBoardEntryId); const unsupported = item["unsupported"]; if (typeof unsupported !== "boolean" || !supportingEntryIds.every((entry) => allowed.has(entry)) || (unsupported ? supportingEntryIds.length !== 0 : supportingEntryIds.length === 0)) throw new TypeError("Claim support must be explicit and within Analyst context"); return { statement: string(item["statement"], "claim statement"), supportingEntryIds, unsupported }; }); const proposals = rawProposals.map((raw, index) => { const item = record(raw, `proposal[${index}]`); exact(item, ["action", "supportStatus", "supportingClaimIndexes"], "proposal"); const rawStatus = item["supportStatus"]; if ((rawStatus !== "SUPPORTED" && rawStatus !== "UNSUPPORTED") || !Array.isArray(item["supportingClaimIndexes"])) throw new TypeError("Proposal support status is invalid"); const supportStatus: "SUPPORTED" | "UNSUPPORTED" = rawStatus; const supportingClaimIndexes = item["supportingClaimIndexes"].map((claimIndex, itemIndex) => { if (!Number.isSafeInteger(claimIndex) || claimIndex < 0 || claimIndex >= claims.length) throw new TypeError(`proposal claim reference ${itemIndex} is invalid`); return claimIndex; }); const referencesUnsupportedClaim = supportingClaimIndexes.some((claimIndex) => claims[claimIndex]?.unsupported); if (new Set(supportingClaimIndexes).size !== supportingClaimIndexes.length || (supportStatus === "SUPPORTED" ? supportingClaimIndexes.length === 0 || referencesUnsupportedClaim : supportingClaimIndexes.length !== 1 || !referencesUnsupportedClaim)) throw new TypeError("Proposal support relation is inconsistent"); return { action: string(item["action"], "proposal action"), supportStatus, supportingClaimIndexes: Object.freeze(supportingClaimIndexes) }; }); return { claims: Object.freeze(claims), proposals: Object.freeze(proposals) }; }
+function analystOutput(value: unknown, prepared: PreparedProfileInvocation, actualTarget: boolean): AnalystOutput { const output = record(value, "Analyst output"); exact(output, ["claims", "proposals"], "Analyst output"); const rawClaims = output["claims"]; const rawProposals = output["proposals"]; if (!Array.isArray(rawClaims) || !Array.isArray(rawProposals) || rawClaims.length === 0 || rawProposals.length === 0 || rawClaims.length > 16 || rawProposals.length > 16) throw new TypeError("Analyst output requires bounded claims and proposals"); const allowed = new Set(prepared.entries.filter((entry) => entry.type === "EvidenceRef" || entry.type === "Observation").map((entry) => entry.id)); const claims = rawClaims.map((raw, index) => { const item = record(raw, `claim[${index}]`); exact(item, ["statement", "supportingEntryIds", "unsupported"], "claim"); const supportingEntryIds = strings(item["supportingEntryIds"], "claim supportingEntryIds").map(parseBoardEntryId); const unsupported = item["unsupported"]; if (typeof unsupported !== "boolean" || !supportingEntryIds.every((entry) => allowed.has(entry)) || (unsupported ? supportingEntryIds.length !== 0 : supportingEntryIds.length === 0)) throw new TypeError("Claim support must be explicit and within Analyst context"); return { statement: string(item["statement"], "claim statement"), supportingEntryIds, unsupported }; }); const proposals = rawProposals.map((raw, index) => { const item = record(raw, `proposal[${index}]`); exact(item, ["action", "supportStatus", "supportingClaimIndexes"], "proposal"); const rawStatus = item["supportStatus"]; if ((rawStatus !== "SUPPORTED" && rawStatus !== "UNSUPPORTED") || !Array.isArray(item["supportingClaimIndexes"])) throw new TypeError("Proposal support status is invalid"); const supportStatus: "SUPPORTED" | "UNSUPPORTED" = rawStatus; const supportingClaimIndexes = item["supportingClaimIndexes"].map((claimIndex, itemIndex) => { if (!Number.isSafeInteger(claimIndex) || claimIndex < 0 || claimIndex >= claims.length) throw new TypeError(`proposal claim reference ${itemIndex} is invalid`); return claimIndex; }); const referencesUnsupportedClaim = supportingClaimIndexes.some((claimIndex) => claims[claimIndex]?.unsupported); if (new Set(supportingClaimIndexes).size !== supportingClaimIndexes.length || (supportStatus === "SUPPORTED" ? supportingClaimIndexes.length === 0 || referencesUnsupportedClaim : (actualTarget ? supportingClaimIndexes.length === 0 : supportingClaimIndexes.length !== 1) || !referencesUnsupportedClaim)) throw new TypeError("Proposal support relation is inconsistent"); return { action: string(item["action"], "proposal action"), supportStatus, supportingClaimIndexes: Object.freeze(supportingClaimIndexes) }; }); return { claims: Object.freeze(claims), proposals: Object.freeze(proposals) }; }
 type ValidatedProfileOutput = ResearcherOutput | AnalystOutput | GenericMaterializationCandidate;
-function validation(prepared: PreparedProfileInvocation, value: unknown, contract?: InvocationBoundOutputContract): ValidatedProfileOutput {
+function validation(database: DatabaseSync, prepared: PreparedProfileInvocation, value: unknown, contract?: InvocationBoundOutputContract): ValidatedProfileOutput {
   if (prepared.profile === "REVIEWER" || prepared.profile === "WRITER") return materializeInvocationOutput(prepared, value, contract);
   if (prepared.profile === "RESEARCHER") return researcherOutput(value, prepared);
-  const analyst = analystOutput(value, prepared);
-  const plantedClaim = analyst.claims.find((claim) => claim.statement === "Customer adoption is guaranteed." && claim.unsupported && claim.supportingEntryIds.length === 0);
-  const plantedClaimIndex = analyst.claims.findIndex((claim) => claim.statement === "Customer adoption is guaranteed." && claim.unsupported && claim.supportingEntryIds.length === 0);
-  const plantedProposal = analyst.proposals.find((proposal) => proposal.action === "Promise adoption." && proposal.supportStatus === "UNSUPPORTED" && proposal.supportingClaimIndexes.length === 1 && proposal.supportingClaimIndexes[0] === plantedClaimIndex);
-  if (plantedClaim === undefined || plantedProposal === undefined) throw new TypeError("Analyst output must retain the frozen planted unsupported Proposal and Claim");
+  const actualTarget = prepared.configuration !== undefined && requireRuntimeConfiguration(database, prepared.configuration).configuration.policy.targetVersion === "accord.reviewer-target/analyst-winner-v1";
+  const analyst = analystOutput(value, prepared, actualTarget);
+  if (!actualTarget) {
+    const plantedClaimIndex = analyst.claims.findIndex((claim) => claim.statement === "Customer adoption is guaranteed." && claim.unsupported && claim.supportingEntryIds.length === 0);
+    if (plantedClaimIndex < 0 || !analyst.proposals.some((proposal) => proposal.action === "Promise adoption." && proposal.supportStatus === "UNSUPPORTED" && proposal.supportingClaimIndexes.length === 1 && proposal.supportingClaimIndexes[0] === plantedClaimIndex)) throw new TypeError("Analyst output must retain the frozen planted unsupported Proposal and Claim");
+  }
   return analyst;
 }
 export interface ExpectedRuntimeBoardEntry {
@@ -826,7 +832,32 @@ function expectedRuntimeBoardEntries(prepared: PreparedProfileInvocation, valida
 export function reconstructWinnerBoardEntries(database: DatabaseSync, invocationId: InvocationId, output: unknown): readonly ExpectedRuntimeBoardEntry[] {
   const prepared = canonicalPrepared(database, invocationId);
   if (prepared.profile !== "RESEARCHER" && prepared.profile !== "ANALYST") throw new Error("generic Profile winners reconstruct from their durable materialization audit");
-  return expectedRuntimeBoardEntries(prepared, validation(prepared, output) as ResearcherOutput | AnalystOutput);
+  return expectedRuntimeBoardEntries(prepared, validation(database, prepared, output) as ResearcherOutput | AnalystOutput);
+}
+/** Selects one actual target only from the exact durable Analyst winner. */
+export function selectAnalystWinnerTarget(database: DatabaseSync, caseId: CaseId, workflowRunId: WorkflowRunId, boardId: BoardId): ReviewerHandoffTarget {
+  const winners = rows(database, `SELECT result.output_json, result.output_digest, result.attempt_id, result.result_id, arrival.recorded_at, invocation.invocation_id
+    FROM runtime_results result JOIN runtime_result_arrivals arrival ON arrival.result_id = result.result_id AND arrival.outcome = 'WINNER'
+    JOIN runtime_invocations invocation ON invocation.invocation_id = result.invocation_id
+    WHERE invocation.case_id = ? AND invocation.workflow_run_id = ? AND invocation.board_id = ? AND invocation.node_id = 'ANALYST' AND invocation.status = 'RESULT_COMMITTED' LIMIT 2`, caseId, workflowRunId, boardId);
+  if (winners.length === 0) throw new Error("REVIEW_TARGET_MISSING");
+  if (winners.length !== 1) throw new Error("TARGET_MISMATCH");
+  const winner = winners[0]!;
+  let prepared: PreparedProfileInvocation; let entries: readonly ExpectedRuntimeBoardEntry[]; let resultId: ResultId;
+  try {
+    prepared = canonicalPrepared(database, parseInvocationId(winner["invocation_id"]));
+    resultId = parseResultId(winner["result_id"]);
+    const output: unknown = JSON.parse(string(winner["output_json"], "Analyst winner output", MAX_WINNER_OUTPUT_BYTES));
+    if (digest(output) !== winner["output_digest"] || deriveRuntimeResultId({ invocationId: prepared.invocationId, attemptId: parseAttemptId(winner["attempt_id"]), outputDigest: digest(output) }) !== resultId) throw new Error("TARGET_MISMATCH");
+    assertExactWinnerBoardGraph(database, prepared, resultId, output, string(winner["recorded_at"], "Analyst winner recordedAt"));
+    entries = reconstructWinnerBoardEntries(database, prepared.invocationId, output);
+  } catch { throw new Error("TARGET_MISMATCH"); }
+  const proposals = entries.filter((entry) => entry.type === "Proposal" && entry.payload["supportStatus"] === "UNSUPPORTED");
+  if (proposals.length === 0) throw new Error("REVIEW_TARGET_MISSING");
+  if (proposals.length !== 1) throw new Error("REVIEW_TARGET_AMBIGUOUS");
+  const proposal = proposals[0]!;
+  if (!proposal.basedOn.some((id) => entries.some((entry) => entry.entryId === id && entry.type === "Claim" && entry.payload["unsupported"] === true))) throw new Error("TARGET_MISMATCH");
+  return Object.freeze({ boardId, caseId, invocationId: prepared.invocationId, proposalBoardRevision: prepared.boardRevision + 1, proposalDigest: proposal.contentDigest, proposalId: proposal.entryId, resultId, runId: workflowRunId, supportStatus: "UNSUPPORTED", workflowNode: "REVIEWER" });
 }
 
 /** The result link is not sufficient evidence: the entire committed revision
@@ -1004,7 +1035,7 @@ function rawResponse(parsed: unknown, digestValue: string, validationErrors: rea
   return json({ ...contents, capsuleDigest: digest(contents) });
 }
 function providerTimestamp(parsed: unknown): string | null { try { return instant(parsedField(parsed, "receivedAt"), "receivedAt"); } catch { return null; } }
-function runtimeResultArrivalAuditDetails(input: Readonly<{ arrivalId: ArrivalId; attemptId: AttemptId; outcome: string; prepared: PreparedProfileInvocation; rawResponseDigest: string; replayableResponseJson: string; resultId?: ResultId; materialization?: DurableGenericMaterialization }>): string {
+function runtimeResultArrivalAuditDetails(database: DatabaseSync, input: Readonly<{ arrivalId: ArrivalId; attemptId: AttemptId; outcome: string; prepared: PreparedProfileInvocation; rawResponseDigest: string; replayableResponseJson: string; resultId?: ResultId; materialization?: DurableGenericMaterialization }>): string {
   if (input.outcome === "INVALID") {
     const evidence = parseInvalidProviderAuditReplay(input.replayableResponseJson, input.prepared.modelId);
     return json({ arrivalId: input.arrivalId, attemptId: input.attemptId, boardRevision: input.prepared.boardRevision, contextDigest: input.prepared.contextDigest, invalidReason: "INVALID_PROVIDER_RESULT", modelId: input.prepared.modelId, node: input.prepared.profile, objectiveDigest: digest(input.prepared.objective), outcome: input.outcome, outputSchema: input.prepared.outputSchema, profileVersion: input.prepared.profileVersion, providerMetadata: evidence.providerMetadata, providerPortVersion: input.prepared.providerPortVersion, providerReceivedAt: evidence.providerReceivedAt, rawResponseDigest: input.rawResponseDigest, runtimeVersion: input.prepared.runtimeVersion, selectedEntries: input.prepared.entries.map((entry) => ({ digest: entry.digest, id: entry.id })), usage: evidence.usage, workflowDefinitionId: FIXED_WORKFLOW_DEFINITION_ID, workflowDefinitionVersion: FIXED_WORKFLOW_DEFINITION, workflowRevision: input.prepared.workflowRevision });
@@ -1023,7 +1054,7 @@ function runtimeResultArrivalAuditDetails(input: Readonly<{ arrivalId: ArrivalId
     if (generic && input.outcome === "WINNER") {
       if (input.resultId === undefined || input.materialization === undefined || deriveRuntimeResultId({ invocationId: input.prepared.invocationId, attemptId: input.attemptId, outputDigest }) !== input.resultId) throw new TypeError("generic winner Result identity is invalid");
       materialization = parseDurableGenericMaterialization(input.prepared, input.attemptId, input.resultId, input.materialization);
-    } else if (!generic) validation(input.prepared, response["output"]);
+    } else if (!generic) validation(database, input.prepared, response["output"]);
   } catch (error) {
     if (generic && input.outcome === "WINNER") throw new Error("generic winner materialization audit cannot be reconstructed", { cause: error });
     invalidReason = "INVALID_PROVIDER_RESULT";
@@ -1410,7 +1441,7 @@ function finalizeInvalidProviderReceipt(database: DatabaseSync, prepared: Prepar
       .run(arrivalId, prepared.invocationId, attempt.attemptId, resultId, arrivalNumber, receipt.rawResponseJson, receipt.rawResponseDigest, receipt.trustedReceivedAt, receipt.responseId);
     linkDeliveryArrival(database, receipt, arrivalId);
     database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at) VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)`)
-      .run(deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]), deriveRuntimeAuditCorrelationId(prepared.invocationId), `RUNTIME_RESULT:INVALID:${attempt.attemptId}:${arrivalNumber}`, prepared.caseId, prepared.boardId, prepared.workflowRunId, runtimeResultArrivalAuditDetails({ arrivalId, attemptId: attempt.attemptId, outcome: "INVALID", prepared, rawResponseDigest: receipt.rawResponseDigest, replayableResponseJson: receipt.replayableResponseJson }), receipt.trustedReceivedAt);
+      .run(deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]), deriveRuntimeAuditCorrelationId(prepared.invocationId), `RUNTIME_RESULT:INVALID:${attempt.attemptId}:${arrivalNumber}`, prepared.caseId, prepared.boardId, prepared.workflowRunId, runtimeResultArrivalAuditDetails(database, { arrivalId, attemptId: attempt.attemptId, outcome: "INVALID", prepared, rawResponseDigest: receipt.rawResponseDigest, replayableResponseJson: receipt.replayableResponseJson }), receipt.trustedReceivedAt);
     if (persistedAttempt["state"] === "RUNNING" || persistedAttempt["state"] === "RESULT_RECEIVED") {
       database.prepare("UPDATE runtime_attempts SET state = 'DISCARDED', finished_at = ? WHERE attempt_id = ? AND state = 'RESULT_RECEIVED'").run(receipt.trustedReceivedAt, attempt.attemptId);
       database.prepare("UPDATE runtime_invocations SET status = 'UNKNOWN' WHERE invocation_id = ? AND status = 'RUNNING'").run(prepared.invocationId);
@@ -1482,7 +1513,7 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
   try {
     if (response === undefined || !exactEnvelope || auditEvidence.providerMetadata === undefined || auditEvidence.providerReceivedAt === undefined || auditEvidence.usage === undefined) throw new TypeError("provider envelope is invalid");
     if (generic) { if (genericResolution?.accepted !== true) throw new TypeError("generic output contract rejected the result"); validated = genericResolution.candidate; }
-    else validated = validation(prepared, response["output"]);
+    else validated = validation(database, prepared, response["output"]);
     outputDigest = digest(response["output"]);
   } catch { invalidReason = "INVALID_PROVIDER_RESULT"; }
   const persistedOutputDigest = outputDigest ?? rawResponseDigest;
@@ -1517,17 +1548,12 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
     linkDeliveryArrival(database, delivery, arrivalId);
     const winnerMaterialization = outcome === "WINNER" ? materialization : undefined;
     database.prepare(`INSERT INTO audit_events (audit_event_id, schema_version, correlation_id, event_kind, case_id, board_id, workflow_run_id, receipt_id, details_json, recorded_at) VALUES (?, 'accord.audit-event/v1', ?, ?, ?, ?, ?, NULL, ?, ?)`)
-      .run(deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]), deriveRuntimeAuditCorrelationId(prepared.invocationId), `RUNTIME_RESULT:${outcome}:${attemptId}:${arrivalNumber}`, prepared.caseId, prepared.boardId, prepared.workflowRunId, runtimeResultArrivalAuditDetails({ arrivalId, attemptId, outcome, prepared, rawResponseDigest, replayableResponseJson, resultId, ...(winnerMaterialization === undefined ? {} : { materialization: winnerMaterialization }) }), trustedReceivedAt);
+      .run(deriveRuntimeAuditEventId("runtime-result-arrival", [arrivalId]), deriveRuntimeAuditCorrelationId(prepared.invocationId), `RUNTIME_RESULT:${outcome}:${attemptId}:${arrivalNumber}`, prepared.caseId, prepared.boardId, prepared.workflowRunId, runtimeResultArrivalAuditDetails(database, { arrivalId, attemptId, outcome, prepared, rawResponseDigest, replayableResponseJson, resultId, ...(winnerMaterialization === undefined ? {} : { materialization: winnerMaterialization }) }), trustedReceivedAt);
     if (outcome !== "WINNER") {
       if (persistedAttempt["state"] === "RUNNING" || persistedAttempt["state"] === "RESULT_RECEIVED") { database.prepare("UPDATE runtime_attempts SET state = 'DISCARDED', finished_at = ? WHERE attempt_id = ? AND state = 'RESULT_RECEIVED'").run(trustedReceivedAt, attemptId); database.prepare("UPDATE runtime_invocations SET status = 'UNKNOWN' WHERE invocation_id = ? AND status = 'RUNNING'").run(prepared.invocationId); failInvocationIfExhausted(database, prepared, trustedReceivedAt); }
       return { arrivalId, attemptId, boardRevision: undefined, invocationId: prepared.invocationId, outcome, proposalBoardRevision: undefined, responseId, resultId };
     }
     const nextRevision = prepared.boardRevision + 1;
-    if (prepared.profile === "WRITER") {
-      if (winnerMaterialization === undefined) throw new Error("Writer winner lacks its durable Artifact materialization");
-      if (authoritativeH1 === undefined) throw new Error("Writer winner lacks authoritative H1");
-      persistWriterArtifact(database, prepared, resultId, winnerMaterialization, authoritativeH1, trustedReceivedAt);
-    }
     const entries: { type: EntryType; payload: Readonly<Record<string, unknown>>; sourceRefs: readonly string[]; basedOn: readonly string[]; entryId?: BoardEntryId; contentDigest?: string }[] = [];
     if (prepared.profile === "RESEARCHER") { const result = validated as ResearcherOutput; const evidenceEntryIds = new Map(result.evidenceRefs.map((item, index) => [item.sourceId, deriveRuntimeBoardEntryId({ invocationId: prepared.invocationId, entryType: "EvidenceRef", index: result.intents.length + index })])); entries.push(...result.intents.map((item) => ({ type: "Intent" as const, payload: { objective: item.objective, scope: item.scope }, sourceRefs: [], basedOn: item.basedOn })), ...result.evidenceRefs.map((item) => ({ type: "EvidenceRef" as const, payload: { ...item }, sourceRefs: [item.sourceId], basedOn: [] })), ...result.observations.map((item) => ({ type: "Observation" as const, payload: { statement: item.statement }, sourceRefs: item.sourceRefs.map((sourceId) => evidenceEntryIds.get(sourceId) as string), basedOn: item.basedOn })));
     } else if (prepared.profile === "ANALYST") { const result = validated as AnalystOutput; const claimIds = result.claims.map((_, index) => deriveRuntimeBoardEntryId({ invocationId: prepared.invocationId, entryType: "Claim", index })); entries.push(...result.claims.map((item) => ({ type: "Claim" as const, payload: { statement: item.statement, unsupported: item.unsupported }, sourceRefs: [], basedOn: item.supportingEntryIds })), ...result.proposals.map((item) => ({ type: "Proposal" as const, payload: { action: item.action, supportStatus: item.supportStatus }, sourceRefs: [], basedOn: item.supportingClaimIndexes.map((index) => claimIds[index] as string) })));
@@ -1548,6 +1574,12 @@ function commitProviderResultInternal(database: DatabaseSync, supplied: Prepared
     const nextState = prepared.profile === "RESEARCHER" ? "ANALYST" : prepared.profile === "ANALYST" ? "REVIEWER" : prepared.profile === "REVIEWER" ? "WRITER" : "WAIT_FOR_APPROVAL";
     if (database.prepare("UPDATE boards SET revision = ? WHERE board_id = ? AND revision = ?").run(nextRevision, prepared.boardId, prepared.boardRevision).changes !== 1 || database.prepare("UPDATE workflow_runs SET state = ?, revision = revision + 1 WHERE workflow_run_id = ? AND state = ? AND revision = ?").run(nextState, prepared.workflowRunId, prepared.profile, prepared.workflowRevision).changes !== 1) throw new Error("winner lost its freshness compare-and-set");
     database.prepare("UPDATE runtime_attempts SET state = 'WINNER', finished_at = ? WHERE attempt_id = ? AND state = 'RESULT_RECEIVED'").run(trustedReceivedAt, attemptId); database.prepare("UPDATE runtime_invocations SET status = 'RESULT_COMMITTED' WHERE invocation_id = ? AND status = 'RUNNING'").run(prepared.invocationId);
+    // Validate H1 against the completed Runtime graph within this atomic winner transaction.
+    if (prepared.profile === "WRITER") {
+      if (winnerMaterialization === undefined) throw new Error("Writer winner lacks its durable Artifact materialization");
+      if (authoritativeH1 === undefined) throw new Error("Writer winner lacks authoritative H1");
+      persistWriterArtifact(database, prepared, resultId, winnerMaterialization, authoritativeH1, trustedReceivedAt);
+    }
     if (prepared.profile === "WRITER" && winnerMaterialization?.schemaVersion === WRITER_MATERIALIZATION_SCHEMA_VERSION) ensureApprovalRequest(database, prepared.caseId, trustedReceivedAt, "WRITER_WINNER");
     return { arrivalId, attemptId, boardRevision: nextRevision, invocationId: prepared.invocationId, outcome: "WINNER", proposalBoardRevision: prepared.profile === "ANALYST" ? nextRevision : undefined, responseId, resultId, ...(winnerMaterialization === undefined ? {} : { materialization: winnerMaterialization }) };
   });

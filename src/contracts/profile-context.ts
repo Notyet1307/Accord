@@ -12,7 +12,7 @@ export type ProfileContextOperation =
   | "SET_ARTIFACT_ELIGIBILITY" | "MUTATE_WORKFLOW_INSTRUCTIONS";
 export type ProfileContextDecisionReason =
   | "CURRENT_CONTEXT" | "CONTEXT_NOT_FOUND" | "CONTEXT_BINDING_MISMATCH" | "STALE_CONTEXT"
-  | "TARGET_MISMATCH" | "INCOMPLETE_CITED_GRAPH" | "ENTRY_OUTSIDE_CONTEXT"
+  | "TARGET_MISMATCH" | "REVIEW_TARGET_MISSING" | "REVIEW_TARGET_AMBIGUOUS" | "INCOMPLETE_CITED_GRAPH" | "ENTRY_OUTSIDE_CONTEXT"
   | "PROTECTED_RESOURCE" | "AUTHORITY_ESCALATION" | "OPERATION_NOT_ALLOWED";
 export type ProfileContextEntryType = "Proposal" | "Claim" | "Observation" | "EvidenceRef" | "Critique" | "VerificationResult";
 export interface ProfileContextEntryRef {

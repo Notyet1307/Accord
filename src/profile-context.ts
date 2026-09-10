@@ -17,6 +17,10 @@ import {
 
 export const REVIEWER_PROFILE_VERSION = "accord.reviewer/v1" as const;
 export const WRITER_PROFILE_VERSION = "accord.writer/v1" as const;
+export const REVIEWER_V2_PROFILE_VERSION = "accord.reviewer/v2" as const;
+export const WRITER_V2_PROFILE_VERSION = "accord.writer/v2" as const;
+export const LEGACY_REVIEWER_PROFILE_VERSION = REVIEWER_PROFILE_VERSION;
+export const LEGACY_WRITER_PROFILE_VERSION = WRITER_PROFILE_VERSION;
 export const REVIEWER_OUTPUT_SCHEMA = "accord.reviewer-output/v1" as const;
 export const WRITER_OUTPUT_SCHEMA = "accord.writer-output/v1" as const;
 export type FixedContextProfile = "REVIEWER" | "WRITER";
@@ -76,9 +80,8 @@ function hexDigest(value: string): string {
   if (!/^[0-9a-f]{64}$/u.test(value)) throw new TypeError("contextDigest must be a lowercase SHA-256 digest");
   return value;
 }
-
-function profileFields(profile: FixedContextProfile): Readonly<{ profileVersion: string; outputSchema: string }> {
-  return profile === "REVIEWER" ? { profileVersion: REVIEWER_PROFILE_VERSION, outputSchema: REVIEWER_OUTPUT_SCHEMA } : { profileVersion: WRITER_PROFILE_VERSION, outputSchema: WRITER_OUTPUT_SCHEMA };
+function profileFields(profile: FixedContextProfile, version = "v1"): Readonly<{ profileVersion: string; outputSchema: string }> {
+  return profile === "REVIEWER" ? { profileVersion: version === "v2" ? REVIEWER_V2_PROFILE_VERSION : REVIEWER_PROFILE_VERSION, outputSchema: REVIEWER_OUTPUT_SCHEMA } : { profileVersion: version === "v2" ? WRITER_V2_PROFILE_VERSION : WRITER_PROFILE_VERSION, outputSchema: WRITER_OUTPUT_SCHEMA };
 }
 
 function existing(database: DatabaseSync, invocationId: InvocationId): Record<string, unknown> | undefined {
@@ -136,7 +139,7 @@ function persistFixedProfileContextInternal(database: DatabaseSync, input: Fixed
   database.exec(nested ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
   try {
     if (input.nodeId !== "REVIEWER" && input.nodeId !== "WRITER") throw new TypeError("only fixed Reviewer and Writer Contexts are supported");
-    const fields = profileFields(input.nodeId);
+    const fields = profileFields(input.nodeId, input.profileVersion.endsWith("/v1") ? "v1" : "v2");
     if (input.workflowDefinitionId !== WORKFLOW_DEFINITION_ID || input.workflowDefinitionVersion !== WORKFLOW_DEFINITION_VERSION || input.profileVersion !== fields.profileVersion || input.outputSchema !== fields.outputSchema) throw new Error("fixed Profile Context contract is invalid");
     const caseId = parseCaseId(input.caseId); const workflowRunId = parseWorkflowRunId(input.workflowRunId); const boardId = parseBoardId(input.boardId); const invocationId = parseInvocationId(input.invocationId); const contextId = deriveProfileContextId({ invocationId });
     const approvedSourcesJson = parseJson(input.approvedSourcesJson, "array", "approvedSourcesJson"); const permissionSummaryJson = parseJson(input.permissionSummaryJson, "object", "permissionSummaryJson"); const contextDigest = hexDigest(input.contextDigest); const createdAt = instant(input.createdAt, "createdAt");

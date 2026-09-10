@@ -41,6 +41,7 @@ const requiredValidationEntrypoints = [
   "test/case-trace.integration.test.ts",
   "test/external-transports.conformance.test.ts",
   "test/frozen-runtime-config.integration.test.ts",
+  "test/reviewer-target.integration.test.ts",
   ...c1TestEntrypoints,
 ];
 const requiredEntrypointSet = new Set(requiredValidationEntrypoints);
@@ -59,6 +60,7 @@ const requiredInvocationMarkers = new Map([
       "dist/test/validation-capabilities.integration.test.js",
       "dist/test/external-transports.conformance.test.js",
       "dist/test/frozen-runtime-config.integration.test.js",
+      "dist/test/reviewer-target.integration.test.js",
       '"$NPM_BIN" run test:conformance',
     ],
   ],
@@ -92,6 +94,7 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted --test-isolation=none --test dist/test/validation-capabilities.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js",
+      "run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js",
       "run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js",
       'contracts/r003-magicchat-handoff.json',
