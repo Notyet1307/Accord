@@ -28,7 +28,7 @@ export async function runR003Driver(options: {
 }): Promise<DriverResult> {
   const { authority, ports } = options;
   const config = normalizeFrozenRuntimeConfiguration(options.configuration);
-  if (config.provider.transportVersion !== "accord.baizhi-responses-transport/v2" || config.magicChat.transportVersion !== "accord.magicchat-websocket-transport/v2" || config.profiles.REVIEWER.profileVersion !== "accord.reviewer/v2" || config.profiles.WRITER.profileVersion !== "accord.writer/v2") throw new Error("DRIVER_CONFIGURATION_UNSUPPORTED");
+  if (!["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"].includes(config.provider.transportVersion) || config.magicChat.transportVersion !== "accord.magicchat-websocket-transport/v2" || config.profiles.REVIEWER.profileVersion !== "accord.reviewer/v2" || config.profiles.WRITER.profileVersion !== "accord.writer/v2") throw new Error("DRIVER_CONFIGURATION_UNSUPPORTED");
   const now = () => new Date().toISOString();
   assertRuntimeConfigurationWindow(config, now());
   if (options.signal.aborted) return { state: "STOPPED", reason: "STOP_REQUESTED" };

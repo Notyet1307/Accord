@@ -448,7 +448,7 @@ function validateUnknownRetryAuthorization(database: DatabaseSync, prepared: Pre
   const id = deriveRuntimeAuditEventId("unknown-retry-authorized", [original]);
   const audit = one(database, "SELECT * FROM audit_events WHERE audit_event_id = ?", id);
   const bound = inspectInvocationRuntimeConfiguration(database, prepared.invocationId);
-  const explicitRetry = bound?.configuration.provider.transportVersion === "accord.baizhi-responses-transport/v2";
+  const explicitRetry = ["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"].includes(bound?.configuration.provider.transportVersion ?? "");
   if (audit === undefined) {
     if (explicitRetry && attempts.length === 2) throw new Error("UNKNOWN_RETRY_AUTHORIZATION_MISSING");
     return undefined;
@@ -466,7 +466,7 @@ export function authorizeUnknownRetry(database: DatabaseSync, suppliedAttemptId:
     if (original === undefined || original["attempt_number"] !== 1 || original["state"] !== "UNKNOWN") throw new Error("UNKNOWN_RETRY_NOT_ELIGIBLE");
     const prepared = canonicalPrepared(database, parseInvocationId(original["invocation_id"]));
     const bound = inspectInvocationRuntimeConfiguration(database, prepared.invocationId);
-    if (bound === undefined || bound.reference.digest !== configurationDigest || bound.configuration.provider.transportVersion !== "accord.baizhi-responses-transport/v2") throw new Error("CONFIG_MISMATCH");
+    if (bound === undefined || bound.reference.digest !== configurationDigest || !["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"].includes(bound.configuration.provider.transportVersion)) throw new Error("CONFIG_MISMATCH");
     const nextAttemptId = deriveRuntimeAttemptId({ invocationId: prepared.invocationId, attemptNumber: 2 });
     const id = deriveRuntimeAuditEventId("unknown-retry-authorized", [originalAttemptId]);
     const prior = one(database, "SELECT * FROM audit_events WHERE audit_event_id = ?", id);
@@ -808,7 +808,7 @@ export function beginPreparedAttempt(database: DatabaseSync, invocationId: Invoc
     }
     let attempt = one(database, "SELECT attempt_id, attempt_number FROM runtime_attempts WHERE invocation_id = ? AND state = 'READY'", validInvocationId);
     if (attempt === undefined && invocation["status"] === "UNKNOWN") {
-      if (inspectInvocationRuntimeConfiguration(database, validInvocationId)?.configuration.provider.transportVersion === "accord.baizhi-responses-transport/v2") throw new Error("UNKNOWN_RETRY_AUTHORIZATION_REQUIRED");
+      if (["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"].includes(inspectInvocationRuntimeConfiguration(database, validInvocationId)?.configuration.provider.transportVersion ?? "")) throw new Error("UNKNOWN_RETRY_AUTHORIZATION_REQUIRED");
       const count = one(database, "SELECT count(*) AS count FROM runtime_attempts WHERE invocation_id = ?", validInvocationId);
       if (count?.["count"] !== 1) throw new Error("Invocation exhausted its two-Attempt budget");
       const attemptId = deriveRuntimeAttemptId({ invocationId: validInvocationId, attemptNumber: 2 });

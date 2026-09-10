@@ -22,7 +22,7 @@ const instant = "2026-08-26T00:02:02.000Z";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 async function until(predicate: () => boolean) { for (let i = 0; i < 100; i++) { if (predicate()) return; await turn(); } assert.fail("driver did not reach expected state"); }
-function fixture(t: TestContext) {
+function fixture(t: TestContext, providerVersion: "accord.baizhi-responses-transport/v2" | "accord.baizhi-responses-transport/v3" = "accord.baizhi-responses-transport/v2") {
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse(instant) });
   const temporary = temporaryDatabase("driver");
   let authority = openAuthorityDatabase(temporary.path);
@@ -31,7 +31,7 @@ function fixture(t: TestContext) {
   authority.installTrustedSyntheticSourceManifest(instant);
   const config = normalizeFrozenRuntimeConfiguration({ schemaVersion: "accord.frozen-runtime-config/v1", configurationId: "driver-fixture", revision: 1,
     magicChat: { endpoint: "wss://chat.example.test/api/app/ws", appId, credentialRef: "credential-ref:chat", authenticationIdentityRevision: 1, transportVersion: "accord.magicchat-websocket-transport/v2" },
-    provider: { endpoint: "https://ai-api-gateway.app.baizhi.cloud/v1/responses", deploymentId: "fixture", credentialRef: "credential-ref:provider", authenticationIdentityRevision: 1, transportVersion: "accord.baizhi-responses-transport/v2" },
+    provider: { endpoint: "https://ai-api-gateway.app.baizhi.cloud/v1/responses", deploymentId: "fixture", credentialRef: "credential-ref:provider", authenticationIdentityRevision: 1, transportVersion: providerVersion },
     profiles: Object.fromEntries(["RESEARCHER", "ANALYST", "REVIEWER", "WRITER"].map((name) => { const instructions = `Run ${name}.`; return [name, { modelId: "fixture-model", profileVersion: `accord.${name.toLowerCase()}/${["REVIEWER", "WRITER"].includes(name) ? "v2" : "v1"}`, outputSchema: `accord.${name.toLowerCase()}-output/v1`, instructions, instructionsDigest: hash(instructions) }]; })),
     policy: { ...FROZEN_RUNTIME_POLICY, targetVersion: REVIEWER_TARGET_POLICY_VERSION }, sourceManifestDigest: raw.prepare("SELECT manifest_digest FROM approved_synthetic_source_manifests").get()?.["manifest_digest"], executionWindow: { notBefore: "2026-08-26T00:00:00.000Z", deadline: "2026-08-26T01:00:00.000Z" }, costLimitCny: null });
   const simulator = new DeterministicMagicChatSimulator({ appId, firstMessageSequence: 2 });
@@ -52,7 +52,7 @@ function fixture(t: TestContext) {
         const input = JSON.parse(String(JSON.parse(String(init.body)).input));
         if (contract !== undefined) { assert.equal(input.entries, undefined); assert.deepEqual(input.context, contract.providerInput); }
         const output = profileOutput(invocation, contract);
-        return new Response(JSON.stringify({ id: `response-${calls.length}`, model: "fixture-model", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify(output) }] }], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }), { headers: { "x-request-id": `request-${calls.length}` } });
+        return new Response(JSON.stringify({ id: `response-${calls.length}`, model: "fixture-model", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify(output) }] }], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }), { headers: { "x-request-id": providerVersion.endsWith("/v3") ? `gateway-${calls.length}, upstream-${calls.length}` : `request-${calls.length}` } });
       }, contract, signal);
       return { ...port, configuration: invocation.configuration!, instructions: invocation.instructions! };
     },
@@ -78,8 +78,8 @@ function profileOutput(invocation: PreparedProfileInvocation, contract?: Invocat
   return { materialAssertions: [{ basisEntryId: basis.entryId, statement: basis.statement }] };
 }
 
-test("Driver serial four profiles, stable human waits, restart and unique publication", async (t) => {
-  const f = fixture(t); const first = f.start(); await f.intake();
+for (const version of ["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"] as const) test(`Driver ${version} serial four profiles, stable human waits, restart and unique publication`, async (t) => {
+  const f = fixture(t, version); const first = f.start(); await f.intake();
   await until(() => f.messages.some((message) => message.payload.message.body.type === "choice"));
   await turn(); assert.deepEqual(f.calls, ["RESEARCHER", "ANALYST", "REVIEWER", "WRITER"]);
   const count = f.requests.length; await turn(); await turn(); assert.equal(f.requests.length, count);
@@ -95,15 +95,18 @@ test("Driver serial four profiles, stable human waits, restart and unique public
   const choice = choiceEnvelope(confirmation, "approve", 4); choice.payload.response.created_at = instant; f.receive(choice); f.receive(choice);
   const result = await resumed.done; assert.equal(result.state, "COMPLETE", JSON.stringify(result)); assert.ok(result.trace);
   assert.equal(f.calls.length, 4); assert.ok(!result.trace.canonicalBytes.includes("provider-canary-driver"));
+  if (version.endsWith("/v3")) assert.ok(result.trace.canonicalBytes.includes("gateway-1, upstream-1"));
   f.reopen(); const again = await f.start().done; assert.equal(again.state, "COMPLETE"); assert.equal(f.calls.length, 4);
 });
 
-test("Driver UNKNOWN default stops; explicit retry acceptance is atomic, replayable and bounded", async (t) => {
-  const f = fixture(t); f.fail(); const first = f.start(); await f.intake(); assert.equal((await first.done).state, "UNKNOWN");
+for (const version of ["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"] as const) test(`Driver ${version} UNKNOWN default stops; explicit retry acceptance is atomic, replayable and bounded`, async (t) => {
+  const f = fixture(t, version); f.fail(); const first = f.start(); await f.intake(); assert.equal((await first.done).state, "UNKNOWN");
   assert.ok(f.states.includes("PROVIDER_TRANSPORT_ERROR"));
   assert.ok(!JSON.stringify(f.states).includes("provider-canary-driver"));
   f.reopen(); assert.equal((await f.start().done).state, "UNKNOWN"); assert.equal(f.calls.length, 1);
   const work = f.authority.inspectDriverWork(appId)!; const attempt = work.attempts[0]!.attemptId;
+  await assert.rejects(f.authority.executePreparedAttempt(work.prepared!, f.ports.provider(work.prepared!, undefined, new AbortController().signal), instant), /UNKNOWN_RETRY_AUTHORIZATION_REQUIRED/u);
+  assert.equal(f.calls.length, 1);
   f.raw.exec("CREATE TRIGGER reject_retry BEFORE INSERT ON audit_events WHEN NEW.event_kind LIKE 'UNKNOWN_RETRY_AUTHORIZED:%' BEGIN SELECT RAISE(ABORT, 'rollback'); END");
   assert.throws(() => f.authority.authorizeUnknownRetry(attempt, work.configuration!.digest, instant), /rollback/u);
   assert.equal(f.authority.inspectDriverWork(appId)!.attempts.length, 1); f.raw.exec("DROP TRIGGER reject_retry");

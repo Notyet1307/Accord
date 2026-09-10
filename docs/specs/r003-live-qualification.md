@@ -50,3 +50,9 @@ Acceptance：可信 launcher 实际退出0及299个离线测试；真实官方 A
 2026-09-10 用户要求「换一个 grok试试呢」，grok-4.6 最小非流式 Responses 探测返回 HTTP 200/completed/OK 后，用户要求「继续」，授权新独立四角色合成联调。旧 gpt-5.6-sol Case/两次 UNKNOWN/FAILED 保留，不复活、不覆盖；Grok 新 App `f8b71be3-0457-4f99-92a1-3a3d1285009e`、Conversation `6ab0d1a5-8f34-44c4-b343-33a0ded32517`、独立数据库 `/Users/yet/.local/share/accord-live/grok/case.sqlite`。四角色统一 grok-4.6，仍为同一用户指定 provider/端点；四次初始调用，无自动重试，UNKNOWN 停止。
 
 新配置 `/Users/yet/.local/share/accord-live/grok/config.json`，SHA-256 `b66560547759d7300dd870af1cfe72eea02c084085cb10efd31266ff5b65f2f3`，窗口 `2026-09-10T04:04:10.447Z` 至 `2026-09-10T04:50:10.447Z`。指令按现有实际契约修正 REVIEWER 枚举 INCONCLUSIVE_VERIFICATION，明确 WRITER 的 context.bases；没有更改代码接受契约或注入角色结果。复用 localhost 服务/证书及独立 test user，新 App secret 位于 grok/credentials.json (0600)。沿用同一合成输入/追问答案，Approval 仍须实际用户在 MagicChat 点击。脱敏 HTTP 诊断 preload 仅用于 operator 日志，不修改请求/响应/重试。
+
+## v3 correlation compatibility continuation
+
+用户在 Grok request-id rejection 定位后要求「继续」，授权核实网关及完成兼容。单次独立最小诊断记录在 `/Users/yet/.local/share/accord-live/grok-header-operation.json` 与 `grok-header-result.json`：HTTP 200、两个原始同名 header（32/36字符，均无逗号/控制字符）。按 C5 Spec v3 保留完整 Fetch-exposed correlation 字段；不改变业务权威、Profile 输出校验、旧 Case 或重试限制。新真实四角色执行必须新 App/配置/数据库，仍由用户在 MagicChat 审批。
+
+v3 新执行环境：App `aa752b40-0e67-4a50-9613-7545bb31d93d`，Conversation `a315b6d6-dd60-445f-af5f-d832bf490879`，根目录 `/Users/yet/.local/share/accord-live/grok-v3/`。配置 SHA-256 `ff9e7409ce9ad5f7464f85550eef29707f1f4778b2fc2e44fc7326227758e7f0`，窗口 `2026-09-10T04:15:17.017Z` 至 `2026-09-10T05:01:17.017Z`。四个 Profile 仍固定 grok-4.6，同一合成任务/来源和指令；唯一 transport 变化为显式 v3。四次初始调用，无自动重试；任一 UNKNOWN 停止，新配置不应用到旧 Run。

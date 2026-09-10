@@ -1,6 +1,7 @@
 import type { InvocationBoundOutputContract } from "../profile-runtime.js";
 import { MAX_PROVIDER_WIRE_CHARACTERS, MAX_PROVIDER_WIRE_UTF8_BYTES, type PreparedProfileInvocation, type ProviderPort } from "../researcher-analyst.js";
 
+export const BAIZHI_CORRELATION_TRANSPORT_VERSION = "accord.baizhi-responses-transport/v3";
 export const BAIZHI_CANCELLABLE_TRANSPORT_VERSION = "accord.baizhi-responses-transport/v2";
 export const BAIZHI_TRANSPORT_VERSION = "accord.baizhi-responses-transport/v1";
 export const BAIZHI_REQUEST_MAX_BYTES = 131_072;
@@ -8,7 +9,7 @@ export const BAIZHI_RESPONSE_MAX_BYTES = 1_048_576;
 export const BAIZHI_TIMEOUT_MS = 120_000;
 export type HttpSender = (url: string, init: RequestInit) => Promise<Response>;
 export interface BaizhiConfig {
-  readonly transportVersion?: typeof BAIZHI_TRANSPORT_VERSION | typeof BAIZHI_CANCELLABLE_TRANSPORT_VERSION;
+  readonly transportVersion?: typeof BAIZHI_TRANSPORT_VERSION | typeof BAIZHI_CANCELLABLE_TRANSPORT_VERSION | typeof BAIZHI_CORRELATION_TRANSPORT_VERSION;
   readonly responsesUrl: string;
   readonly deploymentId: string;
   readonly credential: string;
@@ -20,8 +21,8 @@ function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) fail("PROVIDER_RESPONSE_INVALID");
   return value as Record<string, unknown>;
 }
-function identity(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.trim() !== value || /[\p{Cc},]/u.test(value)) fail("PROVIDER_IDENTITY_INVALID");
+function identity(value: unknown, correlationField = false): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.trim() !== value || (/\p{Cc}/u.test(value) || (!correlationField && value.includes(",")))) fail("PROVIDER_IDENTITY_INVALID");
   return value;
 }
 function endpoint(value: string): string {
@@ -55,7 +56,7 @@ async function boundedBody(response: Response, signal: AbortSignal): Promise<str
   }
 }
 
-function mapResponse(body: string, requestId: string | null, prepared: PreparedProfileInvocation, deploymentId: string): string {
+function mapResponse(body: string, requestId: string | null, prepared: PreparedProfileInvocation, deploymentId: string, correlationField: boolean): string {
   const response = object(JSON.parse(body) as unknown);
   if (response["status"] !== "completed" || (response["error"] !== undefined && response["error"] !== null) || !Array.isArray(response["output"])) fail("PROVIDER_RESPONSE_INVALID");
   if (response["model"] !== prepared.modelId) fail("PROVIDER_MODEL_IDENTITY_MISMATCH");
@@ -80,7 +81,7 @@ function mapResponse(body: string, requestId: string | null, prepared: PreparedP
   }
   if (Number(inputTokens) + Number(outputTokens) !== totalTokens || Number(outputTokens) > 8192) fail("PROVIDER_USAGE_INVALID");
   const wire = JSON.stringify({
-    providerMetadata: { deploymentId, modelId: prepared.modelId, providerPortVersion: prepared.providerPortVersion, requestId: identity(requestId), responseId: identity(response["id"]) },
+    providerMetadata: { deploymentId, modelId: prepared.modelId, providerPortVersion: prepared.providerPortVersion, requestId: identity(requestId, correlationField), responseId: identity(response["id"]) },
     output, receivedAt: new Date().toISOString(), usage: { inputTokens, outputTokens, totalTokens },
   });
   if (wire.length > MAX_PROVIDER_WIRE_CHARACTERS || Buffer.byteLength(wire) > MAX_PROVIDER_WIRE_UTF8_BYTES) fail("PROVIDER_WIRE_TOO_LARGE");
@@ -96,8 +97,10 @@ export function prepareBaizhiResponsesPort(
   outputContract?: InvocationBoundOutputContract,
   signal?: AbortSignal,
 ): ProviderPort {
-  if ((config.transportVersion ?? BAIZHI_TRANSPORT_VERSION) !== (signal === undefined ? BAIZHI_TRANSPORT_VERSION : BAIZHI_CANCELLABLE_TRANSPORT_VERSION)) fail("PROVIDER_TRANSPORT_VERSION_MISMATCH");
+  const transportVersion = config.transportVersion ?? BAIZHI_TRANSPORT_VERSION;
+  if (!(signal === undefined ? [BAIZHI_TRANSPORT_VERSION] : [BAIZHI_CANCELLABLE_TRANSPORT_VERSION, BAIZHI_CORRELATION_TRANSPORT_VERSION]).includes(transportVersion)) fail("PROVIDER_TRANSPORT_VERSION_MISMATCH");
   if (signal?.aborted) fail("PROVIDER_ABORTED");
+  const correlationField = transportVersion === BAIZHI_CORRELATION_TRANSPORT_VERSION;
   const responsesUrl = endpoint(config.responsesUrl);
   if (config.costLimitCny !== null) fail("COST_LIMIT_NOT_IMPLEMENTED");
   const deploymentId = identity(config.deploymentId);
@@ -144,7 +147,7 @@ export function prepareBaizhiResponsesPort(
           }
           if (!response.ok) { void response.body?.cancel().catch(() => undefined); fail("PROVIDER_HTTP_ERROR"); }
           const raw = await boundedBody(response, controller.signal);
-          const wire = mapResponse(raw, response.headers.get("x-request-id"), prepared, deploymentId);
+          const wire = mapResponse(raw, response.headers.get("x-request-id"), prepared, deploymentId, correlationField);
           if (wire.includes(JSON.stringify(credential).slice(1, -1))) fail("PROVIDER_CREDENTIAL_REFLECTION");
           return wire;
         })()]);

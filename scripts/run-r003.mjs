@@ -64,7 +64,7 @@ export async function runCli(args, run = execute, write = console.log) {
     for (const key of ["--database", "--config", "--credentials"]) if (typeof fields[key] !== "string" || !isAbsolute(fields[key])) reject();
     const configuration = normalizeFrozenRuntimeConfiguration(readJson(fields["--config"], 131072, false));
     assertRuntimeConfigurationWindow(configuration, new Date().toISOString());
-    if (configuration.magicChat.transportVersion !== "accord.magicchat-websocket-transport/v2" || configuration.provider.transportVersion !== "accord.baizhi-responses-transport/v2" || configuration.profiles.REVIEWER.profileVersion !== "accord.reviewer/v2" || configuration.profiles.WRITER.profileVersion !== "accord.writer/v2") reject();
+    if (configuration.magicChat.transportVersion !== "accord.magicchat-websocket-transport/v2" || !["accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"].includes(configuration.provider.transportVersion) || configuration.profiles.REVIEWER.profileVersion !== "accord.reviewer/v2" || configuration.profiles.WRITER.profileVersion !== "accord.writer/v2") reject();
     const credentials = readJson(fields["--credentials"], 16384, true);
     const refs = [configuration.magicChat.credentialRef, configuration.provider.credentialRef].sort();
     if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials) || refs[0] === refs[1] || JSON.stringify(Object.keys(credentials).sort()) !== JSON.stringify(refs)) reject();

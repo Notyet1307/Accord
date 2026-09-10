@@ -24,7 +24,7 @@ export interface FrozenRuntimeConfiguration {
   readonly schemaVersion: typeof FROZEN_RUNTIME_CONFIG_VERSION;
   readonly configurationId: string; readonly revision: number;
   readonly magicChat: Readonly<{ endpoint: string; appId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.magicchat-websocket-transport/v1" | "accord.magicchat-websocket-transport/v2" }>;
-  readonly provider: Readonly<{ endpoint: string; deploymentId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.baizhi-responses-transport/v1" | "accord.baizhi-responses-transport/v2" }>;
+  readonly provider: Readonly<{ endpoint: string; deploymentId: string; credentialRef: string; authenticationIdentityRevision: number; transportVersion: "accord.baizhi-responses-transport/v1" | "accord.baizhi-responses-transport/v2" | "accord.baizhi-responses-transport/v3" }>;
   readonly profiles: Readonly<Record<FrozenProfile, FrozenProfileConfiguration>>;
   readonly policy: Omit<typeof FROZEN_RUNTIME_POLICY, "targetVersion"> & Readonly<{ targetVersion: typeof FROZEN_RUNTIME_POLICY.targetVersion | typeof REVIEWER_TARGET_POLICY_VERSION }>;
   readonly sourceManifestDigest: string;
@@ -87,7 +87,7 @@ export function normalizeFrozenRuntimeConfiguration(value: unknown): FrozenRunti
   if (config["costLimitCny"] !== null) fail("COST_LIMIT_NOT_IMPLEMENTED");
   const magic = object(config["magicChat"]); exact(magic, ["endpoint", "appId", "credentialRef", "authenticationIdentityRevision", "transportVersion"]);
   const provider = object(config["provider"]); exact(provider, ["endpoint", "deploymentId", "credentialRef", "authenticationIdentityRevision", "transportVersion"]);
-  if (!(["accord.magicchat-websocket-transport/v1", "accord.magicchat-websocket-transport/v2"] as unknown[]).includes(magic["transportVersion"]) || !(["accord.baizhi-responses-transport/v1", "accord.baizhi-responses-transport/v2"] as unknown[]).includes(provider["transportVersion"])) fail("CONFIG_VERSION_UNSUPPORTED");
+  if (!(["accord.magicchat-websocket-transport/v1", "accord.magicchat-websocket-transport/v2"] as unknown[]).includes(magic["transportVersion"]) || !(["accord.baizhi-responses-transport/v1", "accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"] as unknown[]).includes(provider["transportVersion"])) fail("CONFIG_VERSION_UNSUPPORTED");
   const appId = text(magic["appId"]);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(appId)) fail();
   const rawProfiles = object(config["profiles"]); const names = ["RESEARCHER", "ANALYST", "REVIEWER", "WRITER"] as const; exact(rawProfiles, names);

@@ -294,3 +294,26 @@ test("WebSocket Node success callback null must preserve the pending RPC until i
   assert.equal(socket.closes, 0);
   transport.close(); t.mock.timers.tick(5000);
 });
+
+
+test("v3 preserves combined correlation header without weakening v1/v2 or response identity", async (t) => {
+  const { prepared } = fixture(t); const signal = new AbortController().signal;
+  const header = "gateway-id, upstream-id";
+  for (const version of ["accord.baizhi-responses-transport/v1", "accord.baizhi-responses-transport/v2", "accord.baizhi-responses-transport/v3"] as const) {
+    const port = prepareBaizhiResponsesPort({ ...config, transportVersion: version }, prepared, "Return JSON", async () => response({}, header), undefined, version.endsWith("/v1") ? undefined : signal);
+    if (version.endsWith("/v3")) assert.equal(JSON.parse(await port.complete(completion(prepared))).providerMetadata.requestId, header);
+    else await assert.rejects(async () => port.complete(completion(prepared)), /PROVIDER_IDENTITY_INVALID/u);
+  }
+  const mutable = { ...config, transportVersion: "accord.baizhi-responses-transport/v2" as const };
+  const frozen = prepareBaizhiResponsesPort(mutable, prepared, "Return JSON", async () => response({}, header), undefined, signal);
+  Object.assign(mutable, { transportVersion: "accord.baizhi-responses-transport/v3" });
+  await assert.rejects(async () => frozen.complete(completion(prepared)), /PROVIDER_IDENTITY_INVALID/u);
+  const v3 = { ...config, transportVersion: "accord.baizhi-responses-transport/v3" as const };
+  assert.throws(() => prepareBaizhiResponsesPort(v3, prepared, "Return JSON"), /VERSION_MISMATCH/u);
+  for (const header of [null, "", "a\tb", "a".repeat(513)]) {
+    const port = prepareBaizhiResponsesPort(v3, prepared, "Return JSON", async () => response({}, header), undefined, signal);
+    await assert.rejects(async () => port.complete(completion(prepared)), /PROVIDER_IDENTITY_INVALID/u);
+  }
+  const port = prepareBaizhiResponsesPort(v3, prepared, "Return JSON", async () => response({id:"response-a, response-b"}, header), undefined, signal);
+  await assert.rejects(async () => port.complete(completion(prepared)), /PROVIDER_IDENTITY_INVALID/u);
+});
