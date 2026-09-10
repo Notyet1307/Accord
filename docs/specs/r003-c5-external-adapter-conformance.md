@@ -194,3 +194,13 @@ live 入口、秘密文件 loader 和 driver 目前不在上述能力清单内�
 不采用将 SQLite 冻结配置、Reviewer 授权契约和 driver 一并纳入 C5 的方案 B。原因是其同时触及 persistence、上下文授权、运行驱动和网络边界，超出本次已确认接缝。此取舍不改变 R003 的完整目标或降低最终验收标准。
 
 范围讨论已结束，不重复请求同一确认。按用户后续明确请求先发布 Spec/任务入口，再实施并绑定证据；merge 与真实执行仍未授权。没有新的术语冲突，不创建重复 CONTEXT；C5 不改变事实所有权或既有 ADR，无需新增 ADR。
+
+## v3: Fetch-exposed request correlation field (2026-09-10)
+
+User-authorized live diagnosis reproduced HTTP 200 from Grok with two physical `x-request-id` fields, of lengths 32 and 36, neither containing comma/control characters. Fetch exposes their combined value (70 characters including comma-space). The prior v1/v2 single-ID contract correctly rejects this. This observation does not identify which external hop owns either value.
+
+Explicit `accord.baizhi-responses-transport/v3` instead defines `providerMetadata.requestId` as the complete Fetch-exposed response correlation field value. Preserve it verbatim: do not select, trim, split/rejoin, truncate, sort, deduplicate, or label individual values as gateway/upstream authority. It is not a single provider identity, proof of physical exactly-once execution, or an Accord idempotency key. Nonempty, maximum 512 characters, no leading/trailing whitespace and no control characters remain required. Body `responseId` keeps the existing strict single-ID validation. No fallback header or generated identity is allowed.
+
+v1/v2 behavior remains unchanged. v3 is explicitly frozen into new configuration digests and requires the v2 cancellation/input-contract path. It shares v2's explicit UNKNOWN retry authorization and two-Attempt ceiling; startup/recovery cannot silently take the legacy retry path. Existing metadata fields and storage/digest semantics already preserve bounded strings, so no schema migration or providerPortVersion change is required. Old configurations/Attempts remain immutable.
+
+Acceptance: v3 retains the exact combined field through transport and runtime/Trace; v1/v2 reject it; empty/oversized/control-bearing fields and multi-valued body IDs are rejected; v3 requires AbortSignal; UNKNOWN has no implicit second call, explicit retry authorization is durable/replayable and retains its ceiling. Run existing cancellation, credential-reflection, output, persistence and configuration-binding tests. Real qualification still requires a new explicitly configured run and actual Human Approval; this compatibility change cannot promote prior rejected results.

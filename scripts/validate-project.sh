@@ -128,6 +128,7 @@ umask 077
 VALIDATION_TMPDIR=$(mktemp -d "$VALIDATION_TEMP_PARENT/accord-r003-validation.XXXXXX") \
   || fail "a private validation temporary directory is required"
 VALIDATION_DENIED_DIR=
+ln -s "$VALIDATION_TMPDIR/driver-token-target" "$VALIDATION_TMPDIR/driver-token-link"
 VALIDATION_NPM_LOGS=$VALIDATION_TMPDIR/npm-logs
 mkdir -p "$VALIDATION_NPM_LOGS"
 
@@ -257,6 +258,7 @@ run_node_restricted --test-isolation=none --test dist/test/validation-capabiliti
 run_node_restricted --test-isolation=none --test dist/test/external-transports.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

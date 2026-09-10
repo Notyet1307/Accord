@@ -25,7 +25,10 @@ import {
   type NormalizedMagicChatMessageCreated,
 } from "../contracts/magicchat.js";
 import type { ReviewerDispositionHandoff } from "../contracts/reviewer-disposition.js";
-import { parseReviewerDispositionHandoff } from "../reviewer-disposition.js";
+import { decideProfileContextAccess } from "../reviewer-context.js";
+import { PROFILE_CONTEXT_REQUEST_VERSION } from "../contracts/profile-context.js";
+import type { ReviewerHandoffTarget } from "../contracts/researcher-analyst-handoff.js";
+import { createReviewerDispositionContract, parseReviewerDispositionHandoff } from "../reviewer-disposition.js";
 import {
   CONTRACT_VERSIONS,
   CORE_TRANSACTION_AUTHORITY_TABLES,
@@ -90,6 +93,8 @@ import type {
 import { loadAuthorityMigrations, type AuthorityMigration } from "./migration.js";
 import {
   beginPreparedAttempt,
+  authorizeUnknownRetry,
+  selectAnalystWinnerTarget,
   commitProviderResult,
   executePreparedAttempt,
   reconcileLegacyRuntimeDeliveries,
@@ -3832,6 +3837,39 @@ export class AuthorityDatabase {
   public prepareConfiguredProfileInvocation(input: ConfiguredProfileInvocationRequest): PreparedProfileInvocation {
     this.#assertOpen();
     return prepareConfiguredProfileInvocation(this.#database, input);
+  }
+
+  /** A bounded read-only view for the single R003 coordinator; no inferred completion or new authority. */
+  public inspectDriverWork(appId: string) {
+    this.#assertOpen();
+    const candidates = this.#database.prepare("SELECT c.*, w.state AS workflow_state, w.revision AS workflow_revision, b.revision AS board_revision FROM cases c JOIN workflow_runs w ON w.workflow_run_id = c.workflow_run_id JOIN boards b ON b.board_id = c.board_id LIMIT 2").all();
+    if (candidates.length > 1) throw new Error("DRIVER_CASE_AMBIGUOUS");
+    const row = candidates[0]; if (row === undefined) return undefined;
+    if (row["source_app_id"] !== appId) throw new Error("DRIVER_APP_MISMATCH");
+    const caseId = parseCaseId(row["case_id"]); const workflowRunId = parseWorkflowRunId(row["workflow_run_id"]); const boardId = parseBoardId(row["board_id"]);
+    const state = String(row["workflow_state"]);
+    const invocations = this.#database.prepare("SELECT invocation_id, status FROM runtime_invocations WHERE case_id = ? AND workflow_run_id = ? AND node_id = ? LIMIT 2").all(caseId, workflowRunId, state);
+    if (invocations.length > 1) throw new Error("DRIVER_INVOCATION_AMBIGUOUS");
+    const invocation = invocations[0];
+    const prepared = invocation === undefined ? undefined : reconstructPreparedProfileInvocation(this.#database, parseInvocationId(invocation["invocation_id"]));
+    const attempts = prepared === undefined ? [] : this.#database.prepare("SELECT attempt_id, attempt_number, state FROM runtime_attempts WHERE invocation_id = ? ORDER BY attempt_number LIMIT 3").all(prepared.invocationId).map((attempt) => Object.freeze({ attemptId: parseAttemptId(attempt["attempt_id"]), attemptNumber: Number(attempt["attempt_number"]), state: String(attempt["state"]) }));
+    if (attempts.length > 2) throw new Error("DRIVER_ATTEMPT_LIMIT");
+    const evidenceCandidates = state !== "WRITER" ? [] : this.#database.prepare("SELECT e.board_entry_id FROM board_entries e WHERE e.case_id = ? AND e.entry_type = 'EvidenceRef' AND e.status = 'CANDIDATE' AND NOT EXISTS (SELECT 1 FROM board_entries accepted, json_each(accepted.supersedes_json) link WHERE link.value = e.board_entry_id) LIMIT 17").all(caseId).map((entry) => parseBoardEntryId(entry["board_entry_id"]));
+    if (evidenceCandidates.length > 16) throw new Error("DRIVER_EVIDENCE_LIMIT");
+    const reviewerRows = state !== "WRITER" ? [] : this.#database.prepare("SELECT r.result_id FROM runtime_results r JOIN runtime_invocations i ON i.invocation_id = r.invocation_id JOIN runtime_result_arrivals a ON a.result_id = r.result_id AND a.outcome = 'WINNER' WHERE i.case_id = ? AND i.workflow_run_id = ? AND i.node_id = 'REVIEWER' AND i.status = 'RESULT_COMMITTED' LIMIT 2").all(caseId, workflowRunId);
+    if (state === "WRITER" && reviewerRows.length !== 1) throw new Error("DRIVER_REVIEWER_MISSING");
+    const hasUnboundInvocations = this.#database.prepare("SELECT 1 FROM runtime_invocations i LEFT JOIN invocation_runtime_configurations binding ON binding.invocation_id = i.invocation_id WHERE i.workflow_run_id = ? AND binding.invocation_id IS NULL LIMIT 1").get(workflowRunId) !== undefined;
+    return Object.freeze({ hasUnboundInvocations, caseId, workflowRunId, boardId, state, caseStatus: String(row["status"]), boardRevision: Number(row["board_revision"]), workflowRevision: Number(row["workflow_revision"]), configuration: inspectRunRuntimeConfiguration(this.#database, workflowRunId)?.reference, prepared, invocationStatus: invocation === undefined ? undefined : String(invocation["status"]), attempts: Object.freeze(attempts), evidenceCandidates: Object.freeze(evidenceCandidates), reviewerTarget: state === "REVIEWER" ? selectAnalystWinnerTarget(this.#database, caseId, workflowRunId, boardId) : undefined, reviewerHandoff: reviewerRows[0] === undefined ? undefined : reconstructReviewerDispositionHandoff(this.#database, parseResultId(reviewerRows[0]["result_id"])) });
+  }
+
+  public authorizeUnknownRetry(attemptId: ReturnType<typeof parseAttemptId>, configurationDigest: string, now: string) {
+    this.#assertOpen(); return authorizeUnknownRetry(this.#database, attemptId, configurationDigest, now);
+  }
+
+  public createReviewerDispositionContract(invocation: PreparedProfileInvocation, target: ReviewerHandoffTarget): InvocationBoundOutputContract {
+    this.#assertOpen();
+    const decision = decideProfileContextAccess(this.#database, { schemaVersion: PROFILE_CONTEXT_REQUEST_VERSION, requestId: `driver-review:${invocation.invocationId}`, requestTime: readFixedProfileContext(this.#database, invocation.invocationId)!.createdAt, operation: "READ_CONTEXT", caseId: invocation.caseId, workflowRunId: invocation.workflowRunId, boardId: invocation.boardId, boardRevision: invocation.boardRevision, workflowRevision: invocation.workflowRevision, profile: "REVIEWER", context: { invocationId: invocation.invocationId, contextId: invocation.contextId, contextDigest: invocation.contextDigest }, target, requestedEntry: null });
+    return createReviewerDispositionContract(invocation, decision);
   }
 
   public createWriterArtifactContract(invocation: PreparedProfileInvocation, h1: ReviewerDispositionHandoff): InvocationBoundOutputContract {
