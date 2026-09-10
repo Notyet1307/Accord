@@ -2,7 +2,7 @@
 
 ## 状态、权威与授权
 
-- Revision：`R003-F2/r1.1`；状态：本地实施规格。2026-09-10 用户在本会话查看 F2 在制改动后要求「你来接手继续吧」，本轮据此接续 F2 本地实现与离线验证；未授权 push、合并或真实服务执行。
+- Revision：`R003-F2/r1.1`；状态：本地实施规格。2026-09-10 用户在本会话查看 F2 在制改动后要求「你来接手继续吧」，先据此接续 F2 本地实现与离线验证；用户随后明确答复「授权 F2 推送合并，并继续 Driver」，授权 F2 提交、推送、创建 PR、当前提交检查通过后合并，以及依赖满足后的 Driver 本地实现。真实服务执行仍未授权。
 - 历史 r1 在 `d78ebb22e03001cc60306aa60f37df4e23090ee2` 仅获规格/Issue 发布授权，该历史事实不变。
 - 实施基线：`b7dbb31ba5de54893e1e12ffec07966ef055be9f`（F1 PR #74 已合并）；沿用 `012_r003_frozen_runtime_config.sql` / schema 12，不新增迁移。接手续做的 8 个源码文件改动在同一工作区保留并纳入验收；未提交结果须按工作区差异标识，不冒充基线 SHA 的 CI。
 - Authoritative inputs：[R003/r1](../product/releases/r003-governed-case-blackboard-walking-skeleton.md)、[ADR-0002](../adr/0002-production-coordination-runtime-language.md)、[ADR-0003](../adr/0003-r003-governed-case-blackboard-boundary.md)、[C5/r1.1](r003-c5-external-adapter-conformance.md)、当前代码/测试，以及 [delivery gate](../agents/delivery-gate.md)、[tracker](../agents/issue-tracker.md)、[labels](../agents/triage-labels.md)。Vision 只提供长期方向。
