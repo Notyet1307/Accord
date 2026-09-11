@@ -259,6 +259,7 @@ run_node_restricted --test-isolation=none --test dist/test/external-transports.c
 run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/r004-dialogue.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

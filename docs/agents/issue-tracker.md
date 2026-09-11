@@ -6,7 +6,8 @@ GitHub is the sole remote owner of Issue, label, relationship, PR, commit, check
 
 Follow `delivery-gate.md`: one authorized goal, one versioned repository Spec, one Issue, and one SHA-bound PR evidence record. Read the Issue including comments and labels before changing it; re-fetch after remote mutations rather than trusting local intent.
 
-- Use #44 for C4 Spec preparation; link `docs/specs/r003-c4-recovery-trace-verification.md` and identify its draft digest until an actual delivered Git revision exists. Preparation does not authorize implementation or revive #44's historical child graph. Preserve #62 and PR #64 as the completed C3 task/evidence, with `docs/specs/r003-c3-approval-publication.md` unchanged.
+- For current work, start at [docs/work/current.md](../work/current.md) and re-fetch its GitHub pointers. This file is navigation, not a local task-state authority.
+- Historical C4 used #44 / PR #66 and `docs/specs/r003-c4-recovery-trace-verification.md`; read the current state and closing comments even when the old body still says preparation. Do not reuse that task or revive its old graph for a later Release. Preserve C3 #62 / PR #64 and the existing versioned Specs as historical evidence.
 - A prerequisite PR must not close the feature Issue or imply implementation authorization.
 - Keep task status on GitHub. A label, old admission statement, accepted Spec, or existing queue entry does not authorize execution.
 - PRs deliver authorized changes and own the current evidence index; they are not feature-request intake. Preserve earlier evidence when refreshing the record for a new SHA/Spec revision.
