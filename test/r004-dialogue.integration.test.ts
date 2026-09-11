@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { realpathSync, symlinkSync } from "node:fs";
+import { realpathSync, symlinkSync, lstatSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { normalizeMagicChatMessageBodyForSend } from "../src/contracts/magicchat.js";
@@ -211,12 +212,20 @@ test("foreign database and symlink are refused; snapshot corruption is detected"
   database.exec("CREATE TABLE r003_existing (id INTEGER)"); database.close();
   try {
     assert.throws(() => new R004Dialogue(temporary.path, binding), /FOREIGN_SCHEMA/);
-    symlinkSync(temporary.path, `${temporary.directory}/link.sqlite`);
-    assert.throws(() => new R004Dialogue(`${temporary.directory}/link.sqlite`, binding), /SYMLINK/);
-    symlinkSync(`${temporary.directory}/missing.sqlite`, `${temporary.directory}/dangling.sqlite`);
-    assert.throws(() => new R004Dialogue(`${temporary.directory}/dangling.sqlite`, binding), /SYMLINK/);
-    symlinkSync(temporary.directory, `${temporary.directory}/parent-link`);
-    assert.throws(() => new R004Dialogue(`${temporary.directory}/parent-link/new.sqlite`, binding), /SYMLINK/);
+    const permission = Reflect.get(process, "permission");
+    const restricted = typeof permission === "object" && permission !== null;
+    const link = restricted ? join(tmpdir(), "synthetic-authority-symlink") : `${temporary.directory}/link.sqlite`;
+    const dangling = restricted ? join(tmpdir(), "synthetic-authority-dangling-symlink") : `${temporary.directory}/dangling.sqlite`;
+    const parent = restricted ? join(tmpdir(), "synthetic-directory-symlink") : `${temporary.directory}/parent-link`;
+    if (!restricted) {
+      symlinkSync(temporary.path, link);
+      symlinkSync(`${temporary.directory}/missing.sqlite`, dangling);
+      symlinkSync(temporary.directory, parent);
+    }
+    for (const path of [link, dangling, parent]) assert.equal(lstatSync(path).isSymbolicLink(), true);
+    assert.throws(() => new R004Dialogue(link, binding), /SYMLINK/);
+    assert.throws(() => new R004Dialogue(dangling, binding), /SYMLINK/);
+    assert.throws(() => new R004Dialogue(`${parent}/new.sqlite`, binding), /SYMLINK/);
     const path = `${temporary.directory}/pilot.sqlite`;
     const pilot = new R004Dialogue(path, binding); pilot.close();
     const corrupt = new DatabaseSync(path); corrupt.exec("UPDATE r004_dialogue SET digest='bad'"); corrupt.close();
