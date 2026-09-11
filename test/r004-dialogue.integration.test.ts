@@ -215,6 +215,8 @@ test("foreign database and symlink are refused; snapshot corruption is detected"
     assert.throws(() => new R004Dialogue(`${temporary.directory}/link.sqlite`, binding), /SYMLINK/);
     symlinkSync(`${temporary.directory}/missing.sqlite`, `${temporary.directory}/dangling.sqlite`);
     assert.throws(() => new R004Dialogue(`${temporary.directory}/dangling.sqlite`, binding), /SYMLINK/);
+    symlinkSync(temporary.directory, `${temporary.directory}/parent-link`);
+    assert.throws(() => new R004Dialogue(`${temporary.directory}/parent-link/new.sqlite`, binding), /SYMLINK/);
     const path = `${temporary.directory}/pilot.sqlite`;
     const pilot = new R004Dialogue(path, binding); pilot.close();
     const corrupt = new DatabaseSync(path); corrupt.exec("UPDATE r004_dialogue SET digest='bad'"); corrupt.close();

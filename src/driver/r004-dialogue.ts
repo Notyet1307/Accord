@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { normalizeMagicChatEnvelope, normalizeMagicChatMessageBodyForSend, parseMagicChatMessageSendPayload } from "../contracts/magicchat.js";
@@ -65,7 +65,10 @@ function validateBinding(binding: DialogueBinding): void {
 function safePath(path: string): void {
   if (!isAbsolute(path) || resolve(path) !== path) throw new Error("DIALOGUE_DATABASE_PATH_INVALID");
   for (let current = path; ; current = dirname(current)) {
-    try { if (lstatSync(current).isSymbolicLink()) throw new Error("DIALOGUE_DATABASE_SYMLINK"); }
+    try {
+      if (lstatSync(current).isSymbolicLink() || realpathSync(current) !== current) throw new Error("DIALOGUE_DATABASE_SYMLINK");
+      break; // Canonical resolution checks ancestors without reading outside the permitted root.
+    }
     catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
     if (dirname(current) === current) break;
   }
