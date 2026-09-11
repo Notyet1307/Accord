@@ -23,6 +23,8 @@ If authorities for the same concern conflict, do not silently choose one. State 
 
 ## 2. Minimal reading paths
 
+For project takeover or progress questions, start at `docs/work/current.md`, then inspect its actual code, GitHub and evidence references. `docs/architecture.md` describes implemented seams; dated handoff reports are snapshots, not task status or authorization.
+
 Read the smallest authoritative set needed for the task.
 
 ### Product direction or cross-boundary architecture
@@ -154,9 +156,11 @@ CRDT must not own:
 
 These require the transactional or otherwise explicitly selected authority defined by the applicable Release and ADR.
 
-## 7. Current R003 fence
+## 7. Current Release fence
 
-R003 is the committed current product increment. Its accepted boundary is owned by:
+R004 is the current accepted increment, limited to the SAS conversational pilot in `docs/product/releases/r004-sas-conversational-agent-pilot.md` and ADR-0004. The first locally authorized task is `docs/specs/r004-sas-contact-dialogue.md`; this does not authorize live services or production.
+
+The following R003 fence remains binding for R003 code and records. Its accepted boundary is owned by:
 
 - `docs/product/releases/r003-governed-case-blackboard-walking-skeleton.md`;
 - `docs/adr/0002-production-coordination-runtime-language.md`;

@@ -24,6 +24,7 @@
     "test:contract": "node --test dist/test/contracts.test.js",
     "test:integration": "node --test dist/test/sqlite-startup.integration.test.js dist/test/researcher-analyst.integration.test.js dist/test/writer-artifact.integration.test.js dist/test/approval-publication.integration.test.js dist/test/approval-publication-recovery.integration.test.js dist/test/case-trace.integration.test.js",
     "test:conformance": "node --test dist/test/synthetic-intake.conformance.test.js dist/test/magicchat-protocol.conformance.test.js",
+    "test:r004": "node --test dist/test/r004-dialogue.integration.test.js",
     "verify:c4": "npm run build && node --test dist/test/synthetic-intake.conformance.test.js",
     "test": "npm run test:contract && npm run test:integration && npm run test:conformance",
     "verify:oracle:r003-c1:o01": "npm run build && node scripts/verify-r003-c1-oracle.mjs O01 && node --test dist/test/oracles/r003-c1-o01-schema9.test.js",

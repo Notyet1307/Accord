@@ -156,6 +156,8 @@ VALIDATION_DANGLING_SYMLINK_PATH=$VALIDATION_TMPDIR/synthetic-authority-dangling
 printf '%s\n' "synthetic symlink target" >"$VALIDATION_SYMLINK_TARGET"
 ln -s "$VALIDATION_SYMLINK_TARGET" "$VALIDATION_SYMLINK_PATH"
 ln -s "$VALIDATION_DANGLING_SYMLINK_TARGET" "$VALIDATION_DANGLING_SYMLINK_PATH"
+ln -s "$VALIDATION_TMPDIR" "$VALIDATION_TMPDIR/synthetic-directory-symlink"
+ln -s "$VALIDATION_DANGLING_SYMLINK_TARGET" "$VALIDATION_TMPDIR/r004-authority-dangling-symlink"
 
 # The ambient Node process may only validate package metadata and bootstrap
 # npm's cache-only materialization. Lifecycle scripts are disabled, and all
@@ -259,6 +261,7 @@ run_node_restricted --test-isolation=none --test dist/test/external-transports.c
 run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/r004-dialogue.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

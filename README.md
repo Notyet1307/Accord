@@ -12,7 +12,7 @@ Accord 让企业员工通过自然语言提出复杂目标，由受管 Agent 团
 
 ## 一句话定位
 
-Accord 不是新的 Agent 聊天客户端，也不是 Coding Agent 工作台。
+Accord 以聊天承接用户目标，并用 Case 协调执行。当前 R004 的用户入口是固定 SAS 联系人；消息界面由 MagicChat 提供。
 
 它是位于企业协作入口、Agent 执行环境和领域权威系统之间的**受管协调平面**：
 
@@ -53,12 +53,19 @@ Agent Runtime 或执行工作空间负责回答：
 ---
 ## 当前开发入口
 
-当前目标为 C4 Spec 准备，唯一 GitHub 任务入口是 [#44](https://github.com/Notyet1307/Accord/issues/44)，规格草案见 [`docs/specs/r003-c4-recovery-trace-verification.md`](docs/specs/r003-c4-recovery-trace-verification.md)。本轮只准备 Spec 和入口，不启动 C4 实现。C3 已由 [PR #64](https://github.com/Notyet1307/Accord/pull/64) 交付，其 [Spec](docs/specs/r003-c3-approval-publication.md) 和证据保持历史权威。实现、push/PR/merge 和真实外部执行分别受实际用户请求授权；任务状态以 GitHub 为准，README 不维护状态账本。
+当前增量是 **R004：固定 SAS 事件研判助手的 IM 对话试点**。本次交付将 Release、ADR、离线实现与开发入口纳入版本控制，任务见 [#77](https://github.com/Notyet1307/Accord/issues/77)；精确交付版本与检查以关联 PR 为准。从 [当前工作入口](docs/work/current.md) 核对合同、GitHub 任务入口与实际证据。
 
-开发门禁见 [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md)。以下产品模型和外部系统职责不是本仓库默认开发流程的额外门禁。
+| 想了解什么 | 入口 |
+| --- | --- |
+| 现在做哪一项、下一步是什么 | [当前工作入口](docs/work/current.md) |
+| 当前代码如何连接、哪里仍是模拟 | [实际架构](docs/architecture.md) |
+| 如何构建、测试与运行 | [开发验证](docs/development.md) |
+| 哪些能力有证据、旧任务怎样处理 | [接管回执（2026-09-11 快照）](docs/handoff-receipt-2026-09-11.md) |
+| 长期产品方向 | [Vision](docs/product/VISION.md) |
+
+外部合规查询里程碑暂名 R005，仍为[未批准提案](docs/handoff-receipt-2026-09-11.md)，不替换 R004。R004 当前只有本地离线两轮对话实现，真实 SAS 对话服务尚未接通。R003 的实际联调记录不代表 R004 已可使用。开发授权与交付规则见 [delivery gate](docs/agents/delivery-gate.md)；GitHub 拥有任务状态，本页只做导航。
 
 ---
-
 
 ## R003 executable authority and MagicChat ingress
 
@@ -218,6 +225,8 @@ Failure-recoverable
 ---
 
 ## 目标架构概览
+
+以下为长期愿景，包含尚未接入的系统；已实现路径见 [实际架构](docs/architecture.md)。
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -405,7 +414,7 @@ RuntimeOperation
 
 ---
 
-## 当前状态
+## Release 沿革与当前增量
 
 ### R001：受管 Agent 团队内部决策方案
 
@@ -443,66 +452,19 @@ R002/r2 的验证结果与 ADR-0001 作为 R002 范围内的历史证据保留�
 
 ### R003：Governed Case Blackboard Walking Skeleton
 
-状态：`COMMITTED`
+R003 是已交付代码的历史增量：TypeScript、SQLite/WAL schema 12、固定四角色、Typed Blackboard、人工批准和唯一发布。F1/F2/Driver 已经由 PR #74/#75/#76 合并，存在受控真实 MagicChat/Grok happy-path 记录；完整真实 crash-window qualification 与生产适用性仍未证明。
 
-当前实现包含 TypeScript/SQLite authority core、MagicChat ingress/wait-resume、`RESEARCHER` → `ANALYST` Runtime recovery、四个固定 Profile 的 bounded Invocation/Attempt arbitration、最小权限 Reviewer/Writer Context、双 Reviewer disposition 与 H1，以及完整 sealed-manifest 校验后的 `ACCEPTED` EvidenceRef 和 `WRITER` 唯一 Artifact/ArtifactRef/H2。schema 11 将 Writer winner 与审批请求原子提交，通过真实形状的 `choice.response_created` 绑定人工决定与 Artifact revision/digest，并在 Claim、Freshness 和发送前本地门禁通过后确定性发布；未知结果只以原 request ID 恢复，外部确认后才完成 Workflow。
+精确合同保持在 [R003 Release](docs/product/releases/r003-governed-case-blackboard-walking-skeleton.md)、[ADR-0003](docs/adr/0003-r003-governed-case-blackboard-boundary.md) 和对应 Specs；本 README 不重述实现状态。当前核验范围及历史证据索引见 [接管回执](docs/handoff-receipt-2026-09-11.md)。
 
-审批、拒绝、串行 receipt/ACK、旧库迁移、篡改拒绝和未知发送恢复已有本地合成验证。被阻塞的 reliable event 保留为 `RECEIVED`，须在较低 cursor 的 ACK 确认后重放源事件继续；当前 adapter 不自动排空接收队列。发布请求保留 Artifact Markdown 原始字节；确认校验遵循 pinned MagicChat 的正文规范化，模拟器不证明真实 Markdown 渲染。上述代码与非 qualification CI 不构成真实人工审批、MagicChat 联调、C4/C5 验收或生产资格，也不表示 R003 已完成。
+### R004：SAS 对话式事件研判试点
 
-R003 的精确边界是：
-
-```text
-One Synthetic Case
-One Fixed Workflow
-One Typed Blackboard
-Four Fixed Profiles
-One Native LLM Turn Adapter
-One Human Approval
-One Response Owner
-One Artifact
-One End-to-End Trace
-One Process / One Replica / SQLite WAL
-```
-
-R003 负责验证 Case、Typed Blackboard、四个固定非预置模型 Profile、Evidence-to-Artifact 链、Approval、Freshness、Dedup 和崩溃恢复。
-
-**R003 不引入 Lody、ACP、远程机器、Worktree、CRDT、动态 Agent、Planner/Harness 正式集成或通用 Runtime 平台。**
-
-参见：
-
-- [`docs/product/releases/r003-governed-case-blackboard-walking-skeleton.md`](docs/product/releases/r003-governed-case-blackboard-walking-skeleton.md)
-- [`docs/adr/0002-production-coordination-runtime-language.md`](docs/adr/0002-production-coordination-runtime-language.md)
-- [`docs/adr/0003-r003-governed-case-blackboard-boundary.md`](docs/adr/0003-r003-governed-case-blackboard-boundary.md)
-
----
+[Release](docs/product/releases/r004-sas-conversational-agent-pilot.md) 与 [ADR-0004](docs/adr/0004-sas-conversational-agent-boundary.md) 已获用户接受。[首个 Spec](docs/specs/r004-sas-contact-dialogue.md) 的离线消费者已有本地实现；SAS 真实对话接口、无工具运行与 IM 实际验收仍待完成。R004 使用独立试点数据库，不改写 R003 的四角色批准合同。
 
 ## 当前方向与后续顺序
 
-```text
-先完成并验证 R003
-        ↓
-建立通用 RuntimeOperation / RuntimeBinding 契约
-        ↓
-以独立 Release 做 Lody Adapter Integration Spike
-        ↓
-验证 Operation 恢复、配置冻结、无静默 fallback 和权威分离
-        ↓
-再决定是否扩大到正式 Coding Case、团队工作空间或多 Runtime
-```
+固定助手的离线两轮对话 → SAS 对话提交/查询与无工具边界 → Accord 真实 IM 对话 → 消费 SAS 输入/研判闭环 → 有界真实验收。
 
-Lody 不是 R003 的实现依赖，也不是当前编码授权。
-
-任何 Lody 接入必须先形成：
-
-1. 有边界的 Release Frame；
-2. 具体用户场景；
-3. Runtime Operation 契约；
-4. 权限与秘密边界；
-5. 失败和恢复模型；
-6. 外部事实 Owner；
-7. 可执行 Acceptance Tests；
-8. 必要的 ADR；
-9. 版本化 Spec 和明确限定范围的用户执行授权。
+Lody、动态 Agent、多 Runtime 和通用平台仍属于 [Vision](docs/product/VISION.md) 的后续方向，不是这条 SAS 试点的前置工作。任何后续接入都需要自己的具体场景、合同和授权。
 
 ---
 
@@ -553,7 +515,7 @@ Lody 不是 R003 的实现依赖，也不是当前编码授权。
 | 当前 Release 承诺什么行为 | [`docs/product/releases/`](docs/product/releases/) |
 | 某项承重技术决策为什么这样选 | [`docs/adr/`](docs/adr/) |
 | AI 如何选择权威来源和避免越界 | [`AGENTS.md`](AGENTS.md) |
-| 当前目标及其规格草案 | [Issue #44](https://github.com/Notyet1307/Accord/issues/44) → [`docs/specs/r003-c4-recovery-trace-verification.md`](docs/specs/r003-c4-recovery-trace-verification.md) |
+| 当前目标、Spec 与任务入口 | [当前工作入口](docs/work/current.md) |
 | OMP 开发授权、检查和 PR 证据 | [`docs/agents/delivery-gate.md`](docs/agents/delivery-gate.md) |
 | Tracker、Label 和关系如何表达 | [`docs/agents/`](docs/agents/) |
 | Lody 在 Accord 中的准确位置 | [`docs/product/research/lody-runtime-operation-and-coding-workspace.md`](docs/product/research/lody-runtime-operation-and-coding-workspace.md) |

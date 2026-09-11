@@ -14,7 +14,7 @@
 - `recommended_path`: `docs/product/VISION.md`
 - `scope`: Accord 长期产品目标、逻辑架构、不变量、Agent Execution Plane 边界与能力实施地图
 - `not_a_substitute_for`: Accepted Release、Delivery Spec、Ticket、Accepted ADR、当前代码和测试
-- `current_release_fence`: R003/r1
+- `current_release_fence`: R004/r1（SAS 对话式事件研判试点；R003 保持其原合同）
 - `external_reference_added`: Lody at `LodyAI/Lody@953759639c59aa567628cb352477502b9d104080`
 
 ---
@@ -61,7 +61,7 @@
 | 承重技术决策 | 适用的 Accepted ADR |
 | 全局且不可从代码发现的不变量 | 根目录 `AGENTS.md` |
 | 当前 Issue、PR、Label 和依赖关系 | GitHub |
-| 当前执行、Attempt、Reviewer 和恢复事实 | 配置的 Harness |
+| 当前开发执行事实 | 实际 OMP 工具、命令和审查记录；其他执行系统仅拥有其实际记录，见 [Delivery Gate](../agents/delivery-gate.md) |
 | 企业身份、会话和可见消息 | MagicChat |
 | 长期目标和方向一致性 | 本文档 |
 | 外部项目事实与设计启发 | 带日期和 Commit 的研究材料 |

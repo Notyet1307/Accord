@@ -86,5 +86,6 @@ env -i \
   --test dist/test/validation-capabilities.integration.test.js dist/test/external-transports.conformance.test.js dist/test/frozen-runtime-config.integration.test.js dist/test/reviewer-target.integration.test.js dist/test/r003-driver.integration.test.js
 
 "$NPM_BIN" run test:conformance
+"$NODE_BIN" --test dist/test/r004-dialogue.integration.test.js
 
 printf '%s\n' "PASS $CI_VALIDATION_KIND CI typecheck, handoff, contract, integration, capability, and conformance suites"
