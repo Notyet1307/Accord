@@ -1,7 +1,7 @@
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { normalizeMagicChatEnvelope, parseMagicChatMessageSendPayload } from "../contracts/magicchat.js";
+import { normalizeMagicChatEnvelope, normalizeMagicChatMessageBodyForSend, parseMagicChatMessageSendPayload } from "../contracts/magicchat.js";
 import { boundedDialogueText, dialogueCanonical, dialogueDigest, dialogueId, dialogueIdentifier,
   parseDialogueResult, SAS_DIALOGUE_VERSION, type DialogueContext, type DialogueRequest,
   type DialogueResult } from "../contracts/sas-dialogue.js";
@@ -138,13 +138,13 @@ export class R004Dialogue {
         const payload = parseMagicChatMessageSendPayload(event.payload);
         if (payload.conversation.id !== this.#binding.conversationId || payload.conversation.type !== "app" ||
           payload.message.sender.type !== "app" || payload.message.sender.id !== this.#binding.appId ||
-          payload.message.body.type !== "text" || payload.message.body.content !== response.content) throw new Error("DIALOGUE_SEND_MISMATCH");
+          payload.message.body.type !== "text" || payload.message.body.content !== normalizeMagicChatMessageBodyForSend({ type: "text", content: response.content }).content) throw new Error("DIALOGUE_SEND_MISMATCH");
         if (response.messageId && response.messageId !== payload.message.id) throw new Error("DIALOGUE_SEND_MISMATCH");
         if (response.state !== "sent") {
           response.state = "sent";
           response.messageId = payload.message.id;
           const active = state.cases.find(item => item.id === response.caseId)!;
-          active.history.push({ message_id: payload.message.id, role: "assistant", content: response.content });
+          active.history.push({ message_id: payload.message.id, role: "assistant", content: payload.message.body.content });
         }
         return "confirmed";
       });

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { realpathSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import test from "node:test";
+import { normalizeMagicChatMessageBodyForSend } from "../src/contracts/magicchat.js";
 import { dialogueDigest, type DialogueRequest, type DialogueResult } from "../src/contracts/sas-dialogue.js";
 import { R004Dialogue, type DialogueBinding, type OfflineDialoguePort } from "../src/driver/r004-dialogue.js";
 import type { MagicChatRequestEnvelope } from "../src/magicchat/adapter.js";
@@ -30,7 +31,7 @@ function confirm(pilot: R004Dialogue, request: MagicChatRequestEnvelope): void {
   pilot.receive({ v: 1, id: `ok-${request.id}`, kind: "response", reply_to: request.id, ok: true,
     payload: request.method === "events.ack" ? { cursor: request.payload.cursor } : {
       conversation: { id: binding.conversationId, name: "事件研判助手", type: "app" }, created: true,
-      message: { id: request.id, seq: pilot.snapshot().cursor * 2, body: request.payload.message, summary: request.payload.message.content,
+      message: { id: request.id, seq: pilot.snapshot().cursor * 2, body: normalizeMagicChatMessageBodyForSend(request.payload.message), summary: request.payload.message.content,
         sender: { id: binding.appId, type: "app", name: "事件研判助手", nickname: "事件研判助手" }, created_at: "2026-09-10T00:00:00Z" },
     } });
 }
@@ -278,5 +279,29 @@ test("invalid recovered result replaces the unsent waiting notice with a single 
     await pilot.flush(async request => { if (request.method === "message.send") visible.push(request.payload.message.content); confirm(pilot, request); });
     assert.equal(visible.length, 1);
     assert.match(visible[0]!, /无法校验/);
+  } finally { pilot.close(); temporary.cleanup(); }
+});
+
+
+test("normalized send confirmation survives restart and supplies the confirmed history", async () => {
+  const temporary = temporaryDatabase("r004-normalized-confirmation");
+  let pilot = new R004Dialogue(temporary.path, binding);
+  try {
+    pilot.receive(message(1));
+    await pilot.advance({ submit: async request => answer(request, "  回答\n"), lookup: async () => undefined });
+    let pending!: MagicChatRequestEnvelope;
+    await pilot.flush(async request => {
+      if (request.method === "events.ack") confirm(pilot, request);
+      else pending = request;
+    });
+    pilot.close(); pilot = new R004Dialogue(temporary.path, binding);
+    confirm(pilot, pending);
+    confirm(pilot, pending);
+    assert.equal(pilot.snapshot().responses[0]!.state, "sent");
+    assert.deepEqual(pilot.snapshot().cases[0]!.history.filter(item => item.role === "assistant").map(item => item.content), ["回答"]);
+    pilot.receive(message(2, "请继续解释"));
+    const { port, requests } = counter(pilot);
+    assert.equal(await pilot.advance(port), "complete");
+    assert.equal(requests[0]!.context.at(-1)!.content, "回答");
   } finally { pilot.close(); temporary.cleanup(); }
 });

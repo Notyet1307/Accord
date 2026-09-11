@@ -53,7 +53,7 @@ Agent Runtime 或执行工作空间负责回答：
 ---
 ## 当前开发入口
 
-本地当前增量是 **R004：固定 SAS 事件研判助手的 IM 对话试点**，Release、ADR 与离线实现仍在未提交工作树中；2026-09-11 核验的远端 main 仍为 R003 交付基线。从 [当前工作入口](docs/work/current.md) 核对合同、GitHub 任务入口与实际证据。
+当前增量是 **R004：固定 SAS 事件研判助手的 IM 对话试点**。本次交付将 Release、ADR、离线实现与开发入口纳入版本控制，任务见 [#77](https://github.com/Notyet1307/Accord/issues/77)；精确交付版本与检查以关联 PR 为准。从 [当前工作入口](docs/work/current.md) 核对合同、GitHub 任务入口与实际证据。
 
 | 想了解什么 | 入口 |
 | --- | --- |
