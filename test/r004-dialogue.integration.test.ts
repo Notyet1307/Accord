@@ -215,7 +215,7 @@ test("foreign database and symlink are refused; snapshot corruption is detected"
     const permission = Reflect.get(process, "permission");
     const restricted = typeof permission === "object" && permission !== null;
     const link = restricted ? join(tmpdir(), "synthetic-authority-symlink") : `${temporary.directory}/link.sqlite`;
-    const dangling = restricted ? join(tmpdir(), "synthetic-authority-dangling-symlink") : `${temporary.directory}/dangling.sqlite`;
+    const dangling = restricted ? join(tmpdir(), "r004-authority-dangling-symlink") : `${temporary.directory}/dangling.sqlite`;
     const parent = restricted ? join(tmpdir(), "synthetic-directory-symlink") : `${temporary.directory}/parent-link`;
     if (!restricted) {
       symlinkSync(temporary.path, link);

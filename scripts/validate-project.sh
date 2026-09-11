@@ -157,6 +157,7 @@ printf '%s\n' "synthetic symlink target" >"$VALIDATION_SYMLINK_TARGET"
 ln -s "$VALIDATION_SYMLINK_TARGET" "$VALIDATION_SYMLINK_PATH"
 ln -s "$VALIDATION_DANGLING_SYMLINK_TARGET" "$VALIDATION_DANGLING_SYMLINK_PATH"
 ln -s "$VALIDATION_TMPDIR" "$VALIDATION_TMPDIR/synthetic-directory-symlink"
+ln -s "$VALIDATION_DANGLING_SYMLINK_TARGET" "$VALIDATION_TMPDIR/r004-authority-dangling-symlink"
 
 # The ambient Node process may only validate package metadata and bootstrap
 # npm's cache-only materialization. Lifecycle scripts are disabled, and all
