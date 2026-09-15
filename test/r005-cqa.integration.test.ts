@@ -644,3 +644,20 @@ test("managed pins, endpoint origin and canonical roots fail closed before datab
     } finally { env.cleanup(); }
   }
 });
+
+test("non-JSON binding values fail before creating a database and corrected input can recover", () => {
+  const env = environment();
+  try {
+    Reflect.set(env.binding.runtime, "sandboxId", undefined);
+    assert.throws(() => new R005CqaConsumer(env.path, env.binding, env.clock));
+    assert.equal(existsSync(env.path), false);
+    Reflect.deleteProperty(env.binding.runtime, "sandboxId");
+    const consumer = new R005CqaConsumer(env.path, env.binding, env.clock);
+    let fingerprint: string;
+    try { fingerprint = consumer.accept(input(env.binding)).fingerprint; }
+    finally { consumer.close(); }
+    const reopened = new R005CqaConsumer(env.path, env.binding, env.clock);
+    try { assert.equal(reopened.snapshot().operations[0]?.fingerprint, fingerprint); }
+    finally { reopened.close(); }
+  } finally { env.cleanup(); }
+});
