@@ -379,6 +379,29 @@ test("stop preserves unresolved Run, new Case cannot replace it, and global oper
   } finally { h.cleanup(); }
 });
 
+test("replaying a historical stop cannot abort a later Case's pending RPC", async () => {
+  const h = fixture();
+  const entered = Promise.withResolvers<AbortSignal>(), release = Promise.withResolvers<void>();
+  let pending: Promise<unknown> | undefined;
+  try {
+    await h.candidate();
+    const stop = h.message("/stop"); h.consumer.receive(stop); await h.consumer.flush(h.send);
+    h.consumer.receive(h.message("/new")); await h.consumer.flush(h.send);
+    h.consumer.receive(h.message(fullQuery));
+    const start = h.port.start;
+    h.port.start = async (...args) => {
+      const run = await start(...args); entered.resolve(args[2]); await release.promise; return run;
+    };
+    pending = h.consumer.advance(h.port);
+    const signal = await entered.promise;
+    assert.equal(h.consumer.receive(stop), "replayed");
+    assert.equal(signal.aborted, false);
+    release.resolve();
+    assert.equal(await pending, "complete");
+    assert.equal(h.counts.starts, 2);
+  } finally { release.resolve(); await pending; h.cleanup(); }
+});
+
 test("frozen chat authority rejects reflection drift; expired reopen is inspect-only for sends and Start", async () => {
   const h = fixture();
   try {

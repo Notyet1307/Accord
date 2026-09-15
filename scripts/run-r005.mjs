@@ -53,7 +53,12 @@ function readJson(path, maximum) {
   } finally { closeSync(fd); }
 }
 function noReflection(value, tokens) {
-  const encoded = JSON.stringify(value);
+  const encoded = JSON.stringify(value, (_key, part) => {
+    if (typeof part !== "string") return part;
+    if (tokens.some(token => part.includes(token))) throw new Error("R005_DRIVER_CREDENTIAL_REFLECTION");
+    // Inspect serialized CQA output too; the original payload is never changed.
+    try { return JSON.parse(part); } catch { return part; }
+  });
   if (tokens.some(token => encoded.includes(JSON.stringify(token).slice(1, -1)))) throw new Error("R005_DRIVER_CREDENTIAL_REFLECTION");
 }
 function validateConfiguration(configuration) {
@@ -141,7 +146,7 @@ export async function runR005LiveDriver({ consumer, port, configuration, connect
       if (!dirty) {
         const waiting = Promise.withResolvers();
         resume = waiting.resolve;
-        if (progress === "accepted" || progress === "unknown") timer = setTimeout(waiting.resolve, Math.min(5000, configuration.chat.expiresAt - Date.now()));
+        if (progress !== "idle") timer = setTimeout(waiting.resolve, Math.min(5000, configuration.chat.expiresAt - Date.now()));
         await waiting.promise;
       }
       clearTimeout(timer); resume = undefined;

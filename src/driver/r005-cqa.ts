@@ -492,7 +492,7 @@ export class R005CqaConsumer {
         caseId: state.activeCase.id, contextRevision: state.activeCase.revision, contextDigest: state.activeCase.contextDigest });
       return "received";
     });
-    if (event.kind === "MESSAGE_CREATED" && (event.body === "/stop" || event.body === "停止")) this.#controller?.abort();
+    if (outcome === "received" && event.kind === "MESSAGE_CREATED" && (event.body === "/stop" || event.body === "停止")) this.#controller?.abort();
     return outcome;
   }
   /** A socket write is not delivery. Unknown sends are never retried or recovered by body matching. */

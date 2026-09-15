@@ -86,6 +86,23 @@ test("R005 launcher import is inert and invalid authority never reaches executio
   assert.equal(logs.some(line => line.includes("canary")), false);
 });
 
+test("R005 rejects credentials hidden by nested JSON escaping before execution or persistence", async t => {
+  const f = fixture(t); const { runCli } = await launcher();
+  const secret = 'synthetic-"control\\canary-005';
+  f.credentials["r005-control"] = secret;
+  const output = JSON.stringify({ warnings: [secret] }).replace(/\\(["\\])/gu,
+    (_match, character: string) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  f.binding.profileRevision = JSON.stringify({ output });
+  f.save();
+  let executions = 0; const logs: string[] = [];
+  const result = await runCli(f.args, async () => { executions++; return { state: "STOPPED", reason: "R005_STOPPED" }; },
+    (value: string) => logs.push(value));
+  assert.equal(result, 1);
+  assert.equal(executions, 0);
+  assert.equal(existsSync(f.database), false);
+  assert.equal(logs.some(value => value.includes(secret) || value.includes(output)), false);
+});
+
 test("R005 launcher rejects private-file aliases and input/evidence/SQLite-sidecar collisions without writes", async t => {
   const f = fixture(t); const { runCli } = await launcher(); let executions = 0;
   const execute = async () => { executions++; return { state: "STOPPED", reason: "R005_STOPPED" }; };
@@ -205,6 +222,51 @@ test("R005 real owner recovers only on bounded wakes, receives during a pending 
   assert.equal(closed, true); assert.equal(starts, 1); assert.equal(lookups, 1); assert.equal(cancellations, 0);
   assert.equal(consumer.snapshot().operations[0]!.state, "unknown");
   t.mock.timers.tick(120_000); await turn(); assert.equal(lookups, 1);
+});
+
+test("R005 resumes acknowledged pending input after the old Run terminates without another message", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-09-15T12:00:00Z") });
+  const f = fixture(t); const { runR005LiveDriver } = await launcher();
+  const consumer = new R005CqaConsumer(f.database, f.binding); t.after(() => consumer.close());
+  consumer.configureChat(f.configuration.chat);
+  const simulator = new DeterministicMagicChatSimulator({ appId: f.binding.appId, firstMessageSequence: 3 });
+  const message = (sequence: number, body: string) => magicChatMessageCreatedEnvelope({ body,
+    conversationId: f.binding.conversationId, actorId: f.binding.actorId, messageId: `input-${sequence}`,
+    envelopeEventId: `event-${sequence}`, messageSequence: sequence, cursor: sequence, messageCreatedAt: new Date().toISOString() });
+  const initial = message(1, "问题:等保备案材料？\n主题:mlps\n日期:2026-09-15\n地区:CN\n行业:all");
+  const first = { ...initial, payload: { ...initial.payload, message: { ...initial.payload.message, summary: "Synthetic query" } } };
+  simulator.observeUserMessage(first); consumer.receive(first);
+  await consumer.flush(async request => { consumer.receive(simulator.respond(request, new Date().toISOString())); });
+  const old = consumer.snapshot().operations[0]!;
+  let starts = 0, lookups = 0, receive: (wire: unknown) => void = () => assert.fail("not connected");
+  const port: CqaRunPort = { mode: "managed", bindingDigest: cqaBindingDigest(f.binding), preflight: () => undefined,
+    start: async () => ({ pendingRunId: `run-${++starts}` }),
+    lookup: async () => ({ total: 1, runs: [{
+      runId: "run-1", sandboxId: "sandbox-1", projectId: f.binding.runtime.projectId, agentName: f.binding.runtime.agentName,
+      source: f.binding.runtime.source, operationId: old.frozen.operationId, fingerprint: old.fingerprint,
+      binarySha256: f.binding.binarySha256, guestImageSha256: f.binding.guestImageSha256,
+      requestFileSha256: old.frozen.input.requestFileSha256, volume: old.frozen.input.volume,
+      deploymentSha256: f.binding.managed!.deploymentSha256, observationSha256: cqaSha256("synthetic-observation"),
+      status: ++lookups === 1 ? "running" : "failed", completeOutput: true, exitCode: 1, cleanupError: false,
+    }] }), cancel: async () => undefined };
+  const controller = new AbortController();
+  const done = runR005LiveDriver({ consumer, port, configuration: f.configuration, signal: controller.signal,
+    connect: async (handler: (wire: unknown) => void): Promise<MagicChatTransport> => {
+      receive = handler;
+      return { closed: Promise.withResolvers<string>().promise, close: () => undefined,
+        send: async request => { receive(simulator.respond(request, new Date().toISOString())); } };
+    } });
+  try {
+    await until(() => starts === 1);
+    const followup = message(2, "补充后的备案问题？"); simulator.observeUserMessage(followup); receive(followup);
+    await until(() => lookups === 1 && consumer.snapshot().chat!.sends.some(item => item.state === "sent"));
+    await turn();
+    t.mock.timers.tick(5000); await until(() => consumer.snapshot().operations[0]!.state === "failed");
+    await turn();
+    t.mock.timers.tick(5000); await until(() => starts === 2);
+    assert.equal(consumer.snapshot().operations[1]!.frozen.request.question, "补充后的备案问题？");
+    assert.equal(consumer.snapshot().operations[1]!.frozen.request.caseId, old.frozen.request.caseId);
+  } finally { controller.abort(); await done; }
 });
 
 test("R005 deadline and socket closure stop idle scheduling without reconnecting or submitting", async t => {
