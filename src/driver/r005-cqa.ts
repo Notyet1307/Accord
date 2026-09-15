@@ -97,15 +97,12 @@ function identifier(value: unknown): void { requireValue(typeof value === "strin
 function text(value: unknown): void {
   requireValue(typeof value === "string" && value.isWellFormed() && value.trim().length > 0 && Buffer.byteLength(value) <= 1024, "CQA_BINDING_INVALID");
 }
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    const encoded = JSON.stringify(value);
-    requireValue(encoded !== undefined, "CQA_JSON_VALUE_INVALID");
-    return encoded;
-  }
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalValue(Reflect.get(value, key))]));
+  return value;
 }
+function canonical(value: unknown): string { return JSON.stringify(canonicalValue(value)); }
 export function cqaBindingDigest(binding: CqaBinding): string { return cqaSha256(canonical(binding)); }
 function exactKeys(value: object, required: string[], optional: string[] = []): void {
   requireValue(required.every(key => Object.hasOwn(value, key)) && Object.keys(value).every(key => required.includes(key) || optional.includes(key)), "CQA_FIELDS_INVALID");

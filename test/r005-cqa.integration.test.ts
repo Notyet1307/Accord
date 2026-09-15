@@ -645,19 +645,20 @@ test("managed pins, endpoint origin and canonical roots fail closed before datab
   }
 });
 
-test("non-JSON binding values fail before creating a database and corrected input can recover", () => {
+test("omitted and undefined optional binding fields preserve operation identity across restart", () => {
   const env = environment();
   try {
     Reflect.set(env.binding.runtime, "sandboxId", undefined);
-    assert.throws(() => new R005CqaConsumer(env.path, env.binding, env.clock));
-    assert.equal(existsSync(env.path), false);
-    Reflect.deleteProperty(env.binding.runtime, "sandboxId");
     const consumer = new R005CqaConsumer(env.path, env.binding, env.clock);
     let fingerprint: string;
     try { fingerprint = consumer.accept(input(env.binding)).fingerprint; }
     finally { consumer.close(); }
+    Reflect.deleteProperty(env.binding.runtime, "sandboxId");
     const reopened = new R005CqaConsumer(env.path, env.binding, env.clock);
-    try { assert.equal(reopened.snapshot().operations[0]?.fingerprint, fingerprint); }
+    try {
+      assert.equal(reopened.accept(input(env.binding)).fingerprint, fingerprint);
+      assert.equal(reopened.snapshot().operations.length, 1);
+    }
     finally { reopened.close(); }
   } finally { env.cleanup(); }
 });
