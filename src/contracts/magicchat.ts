@@ -172,7 +172,7 @@ export function parseMagicChatInstant(value: unknown, label: string): string {
   return normalized;
 }
 
-function parseChoiceFreeText(value: unknown, textContract: "r003" | "r004"): string {
+function parseChoiceFreeText(value: unknown, textContract: "r003" | "r004" | "r005"): string {
   const body = asRecord(value, "message body");
   requireExactObjectKeys(body, ["type", "content"], "message body");
   if (body["type"] !== "text" || typeof body["content"] !== "string") {
@@ -182,6 +182,11 @@ function parseChoiceFreeText(value: unknown, textContract: "r003" | "r004"): str
     const content = body["content"];
     if (!content.trim() || !content.isWellFormed() || Buffer.byteLength(content) > 1_048_576) throw new TypeError("R004 text exceeds the bounded frame or is invalid");
     return content; // The R004 coordinator durably explains its stricter 8 KiB per-message limit.
+  }
+  if (textContract === "r005") {
+    const content = body["content"];
+    if (!content.isWellFormed() || Buffer.byteLength(content) > 1_048_576) throw new TypeError("R005 text exceeds the bounded frame or is invalid");
+    return content; // R005 owns semantic limits and durably replies without rewriting question bytes.
   }
   const normalized = body["content"].normalize("NFC").replaceAll("\r\n", "\n").replaceAll("\r", "\n").trim();
   if (normalized.length < 1 || normalized.length > 4_096) {
@@ -431,7 +436,7 @@ export function parseMagicChatMessagesListPayload(value: unknown): MagicChatMess
   return Object.freeze({ limit, messages: Object.freeze(messages) });
 }
 
-export function normalizeMagicChatEnvelope(value: unknown, textContract: "r003" | "r004" = "r003"): NormalizedMagicChatEnvelope {
+export function normalizeMagicChatEnvelope(value: unknown, textContract: "r003" | "r004" | "r005" = "r003"): NormalizedMagicChatEnvelope {
   const envelope = asRecord(value, "MagicChat App WebSocket envelope");
   if (envelope["v"] !== MAGICCHAT_PROTOCOL_VERSION) {
     throw new TypeError(`MagicChat protocol version must be ${MAGICCHAT_PROTOCOL_VERSION}`);

@@ -1,8 +1,8 @@
 # R005：固定合规查询结果的受管消费合同
 
-- Revision：`R005-CQA/r4`；Status：ACCEPTED；2026-09-14。
-- 授权来源：本会话用户先选择「接受 r3，并实施 Adapter 及其本地协议验证」，接受前提案文件 SHA-256 为 `67954b0b7f457a02afba9f29f9bd602a6d917610940f77e282f6337020e703e2`；该摘要只标识原 r3 提案，不是当前文件摘要。随后用户在「继续下一步」中选择「采用分层验证」，该已授权的第 9 节本地资格 runner／合同增量单独编号为 r4。r2、r3 及分层验证修订编号前的历史证据保留原绑定，不重新验收。
-- 本合同的软件授权范围仅限 Accord Adapter、必要消费入口／输入映射、本地协议验证及上述本地资格 runner／合同兼容性修正。真实 Runtime／模型／IM、真实凭据读取、资源／网络部署、CQA／平台修改、发布及 Git 操作须另获明确执行授权，本合同自身不授予这些权限。独立执行范围以实际用户决定及其执行记录为准。X1 的独立执行授权不转移；软件交付不代表真实接缝或完整 R005 完成。
+- Revision：`R005-CQA/r5`；Status：ACCEPTED（私聊软件装配范围）；2026-09-15。
+- 授权来源：r4 的 Adapter／分层资格已由 PR #80 交付。用户随后要求「合并 然后部署 我要测试」，并在明确说明尚无运行装配、需要补实现的选项中选择「MagicChat 私聊」：先接通真实 CQA 查询，再补私聊提问、候选回复及确认。该选择授权本修订的私聊软件装配；不制造实际运行、模型调用或人工确认的通过记录。此前 r2–r4 的授权与证据保留其原修订绑定。
+- 本修订沿用本合同的完整私聊行为，补齐 R005 自有消息接收、字段收集、候选回复、精确 choice 确认与 live launcher。部署供手工测试是当前执行目标；实际资源、独立凭据引用、网络、模型调用上限与窗口须先按第 9 节冻结为有界运行包并取得对应授权。不得借用 X1 的旧授权、启动旧 CQA 环境或接管 R003/R004 会话与数据库。
 - Objective：用户与固定合规资料研究员完成一次有来源的只读查询及补充，获得明确标记的候选答复；选择正式接受/导出时，由本人确认精确 Artifact。
 - Authoritative inputs：已接受的 [R005 Release](../product/releases/r005-compliance-query-conversational-pilot.md)、[ADR-0006](../adr/0006-r005-compliance-query-consumer-boundary.md)、[ADR-0005/r1](../adr/0005-r005-candidate-response-and-trial-trust.md)；[ADR-0002](../adr/0002-production-coordination-runtime-language.md) 的协调语言；[Delivery Gate](../agents/delivery-gate.md)；下述固定生产者源码及执行记录。R003/R004 的实现、库及原 ADR 边界不变。
 - Owner：Accord Coordinator。Producer：经认证的 MagicChat 输入、agent-compose 运行记录、CQA 候选内容、操作员冻结的合成来源快照、实际人工决定。Consumer：Case 与原私聊用户。
@@ -19,7 +19,7 @@
 
 不含客户资料、生产模型启用、扫描、业务写入、上传/知识库编辑、群聊、动态角色、跨 Case 记忆、持续 Delegation、第二 Runtime、通用工作流平台。不得把 R003 合成 source manifest 接受入口改成真实来源后门。
 
-本文描述 R005 所需端到端消费行为；当前软件切片是 `R005CqaConsumer` → agent-compose RunService 的版本化 Adapter，复用现有 wire／来源校验、独立 SQLite 和不可变输入模块，不建立通用 Runtime 或第二运行通路。Accepted Release／ADR 的 Owner 和主接缝不变；Adapter 本地验证不等于全部交付，本文不维护任务状态图。
+本文描述 R005 所需端到端消费行为；r4 已交付 `R005CqaConsumer` → agent-compose RunService 的版本化 Adapter，r5 在同一 R005 owner 内补私聊装配，复用现有 wire／来源校验、独立 SQLite、不可变输入及 MagicChat 官方传输，不建立通用 Runtime 或第二运行通路。Accepted Release／ADR 的 Owner 和主接缝不变；软件、真实接缝和完整 Release 验收分别报告，本文不维护任务状态图。
 
 ### 当前生产者成熟度与交接
 
@@ -44,7 +44,7 @@ Accord 在同一事务内持久化输入 receipt、Case/Workflow/Activity 关联
 
 **稳定身份：** 同 Operation ID 同冻结指纹返回/恢复原操作；同 ID 异指纹拒绝。不能通过给不同输入重新算 ID 来绕过同一受理身份的冲突检查。新用户消息即使文字相同也是新输入；重放同一 Message ID 不新建 Operation。
 
-R005 使用独立的单进程 SQLite/WAL 文件和既有单聚合事务模式：`r005_cqa` schema 1 仅含固定主键、JSON 状态及完整性摘要，持久保存 receipt、Case、冻结 Operation、候选意图及有界审计。r3 状态快照为 version 2；拒绝 version 1，不自动迁移原离线快照。只初始化新 R005 库，不打开／迁移 R003/R004 或其他 schema；启动时核对 schema、快照版本、状态摘要和完整 Binding。输入根目录与库绑定，未来真实运行使用独立新 R005 库，不将离线库或 CQA 试验回执升级为受管状态，也不与旧 Release 同时协调同一 Conversation。
+R005 使用独立的单进程 SQLite/WAL 文件和既有单聚合事务模式：`r005_cqa` schema 1 仅含固定主键、JSON 状态及完整性摘要。r5 状态快照 version 3 在同一聚合中保存消息 receipt／cursor、字段收集与 Case、冻结 Operation、候选、正式 Artifact／challenge／实际决定、发送意图和有界审计。拒绝旧 version 1/2，不自动迁移；真实运行使用独立新 R005 库。启动先只读核对 schema、快照版本、完整性及完整 Binding，再执行写操作；不得打开／迁移 R003/R004 数据库或同时协调其 Conversation。
 
 `CqaBinding.mode` 与 `CqaRunPort.mode` 必须同为 `offline` 或 `managed`；同一窄接口供本地替身和具体 Adapter 使用，生产装配不得自动选择替身或 fallback。Grant 的 `outboundScope` 分别精确为 `offline-only` 或 `synthetic-cqa-managed`，旧离线 Grant 不可用于受管端口；受管范围仍须冻结期限及至多一次新模型调用，不把任意环境变量或 `networkApproved` 当授权。
 
@@ -162,7 +162,7 @@ X1 已证明 stop/resume 更换容器也可能丢失 `/tmp` 回执，且平台 c
 
 ## 7. Failure modes / Recovery / Acceptance tests
 
-验收主面是持久消费入口到可观察的 Case/消息结果，不测试私有 helper 接线。本地使用真实 SQLite、输入文件及可计数固定协议替身控制故障；生产者／平台的实际合同必须由另行授权的外部场景证明。下表保留完整 Release 要求；当前仅授权 Adapter 及本地协议验证，消息端和真实外部场景仍 NOT_RUN，不能将本地检查写成 C01–C19 全部通过。
+验收主面是持久消费入口到可观察的 Case/消息结果，不测试私有 helper 接线。本地使用真实 SQLite、输入文件及可计数固定协议替身控制故障；生产者／平台和 MagicChat 的实际合同须由对应有界运行包证明。r5 补齐 C01–C19 中适用的本地私聊行为；尚未执行的消息端和真实外部场景仍为 NOT_RUN，不将本地检查写成真实 C01–C19 全部通过。
 
 | AC | 场景 | 必须观察到的行为 |
 | --- | --- | --- |
@@ -190,7 +190,7 @@ X1 已证明 stop/resume 更换容器也可能丢失 `/tmp` 回执，且平台 c
 
 ### 当前 Adapter 切片的本地协议验证
 
-沿用 C01–C19；本切片落实 C02–C11、C15–C19 中适用的候选消费行为。C01 的 IM 补字段和 C12–C14 的确认／发布保持未实施。以下是检查要求，不是通过记录：
+沿用 C01–C19；r4 已落实 C02–C11、C15–C19 中适用的候选消费行为。以下是该 Adapter 切片的检查要求，不是后续私聊实现或真实验收的通过记录：
 
 | 对应 AC | 本切片必须观察的行为 |
 | --- | --- |
@@ -201,6 +201,18 @@ X1 已证明 stop/resume 更换容器也可能丢失 `/tmp` 回执，且平台 c
 | C16／C17 | 另获准的真实部署须证明相邻 Operation 输入隔离、实际 payload／配置／回执挂载、控制认证、guest 权限及输出收集；不以本地替身代替 |
 
 本地软件验证使用现有 Node 工具链，覆盖实际 Adapter 的请求／响应和故障路径，不读取真实凭据、不联网业务系统、不启动真实 Runtime 或重新跑生产者验收。交付记录按第 8 节分别报告协议验证和未验证的真实表面。
+
+### r5 私聊装配合同
+
+- 复用 `R005CqaConsumer` 的同一事务 owner，新增显式冻结私聊配置、接收官方 envelope 及发送持久意图的入口；不在第二个数据库复制 Case、Operation 或 Approval。既有结构化 `accept` 与一次 RPC `advance` 合同保持。私聊配置必须在连接前持久冻结授权引用／修订／到期时间和 MagicChat endpoint／credential reference／revision；配置不含秘密，不能由聊天消息修改或自发扩大。
+- 按官方 App 私聊绑定验证 actor、Conversation 和 App；先持久 receipt 和消息身份再 ACK。沿用最多 256 条输入、512 个接收 cursor 的有界试点规模；达到上限明确停止，不裁剪身份导致重放再执行。
+- 普通提问保留原文字节作为 question，确定性逐项收集 topic、asOfDate、jurisdiction、industry。允许用户按提示提供 `mlps`／等保、合法日期、`CN`／中国和行业；缺项或无效项只追问，零外部提交。后续提问可沿用用户已确认的范围；显式修改范围立即使旧候选／challenge 失效。不得默猜日期或行业、调用额外模型改写问题。
+- 完整结构化问题由原消息派生稳定 Case／Workflow／Activity／Operation 与单次 Grant 身份；受理 receipt、上下文和待提交 Operation 必须在同一事务中完成。每个 Grant 只能在已冻结的本次操作员授权范围和 Binding 总调用上限内使用；不能把选中 App 变成持续 Delegation。
+- 完整消息 `停止`／`/stop` 停止新提交并保留原运行取消／UNKNOWN 语义；`/new` 仅在不存在未解决 Operation 或未知发送时明确结束并开始下一 Case；`/status` 返回确定性实际状态。`导出`／`/export` 进入第 6 节正式确认，不创建新模型调用；自由文本“同意”不批准产物。
+- 第 6 节的候选排版、完整预览、15 分钟 choice、精确 revision/digest、拒绝／过期／错主体、新消息失效及原会话导出全部适用。只由实际 choice response 建立接受，Agent 验证不得代用户点击接受。正文或确认卡无法在有界字节内完整表示时返回缩小范围提示，不截断证据或生成假正式产物。
+- 使用现有官方 `message.send`、`events.ack` 及有证据支持的原身份恢复；网络写成功不代表可见发送。当前没有已验证的跨服务重启／缓存淘汰安全重发合同，因此 r5 不自动重发 UNKNOWN 消息，即使上下文未变也保留未知，等待实际相关确认或人工处理；未知发送阻止冲突的新回复。没有协议证明的确认查询不得按正文猜测。旧 R003/R004 的 parser、传输版本和行为保持不变；R005 如需保留输入字节，必须显式选择自身文本策略，不扩大默认行为。
+- live launcher 显式接收私有配置、独立 0600 凭据文件及新 R005 数据库路径；只装配真实 MagicChat transport 与真实 `CqaRunServiceAdapter`。导入模块不发网络请求，不扫描 OMP／HOME 凭据、不自动重连／重新 Start，不支持 fake fallback；凭据不进入状态、日志、异常、trace 或请求正文。
+- 本地验证覆盖字段补齐与同 Case、重放、暂停外部调用时的新输入、候选/确认/导出的稳定身份、全部 choice 拒绝边界、发送确认丢失及重启。真实执行额外证明实际 App 私聊、模型候选、输入／控制／输出资格；本地 sender 和 fixture 不能作为部署成功。
 
 ## 8. State / Artifact handoff 与 Evidence to return
 
@@ -267,15 +279,15 @@ X1 历史运行候选的证据入口是 [§9.6 双轴审查与封存](/Users/yet
 
 ## 9. 分阶段开发与真实验收准入
 
-本表是交付边界，不是工单状态表。用户已接受 R005 Release／ADR 及 r3，并授权离线消费基础上的 Adapter 与本地协议验证；随后选择的本地分层验证增量以 r4 记录，见下节，真实运行各阶段仍需明确执行授权。本地入口接收受信调用者提供的完整结构化消息／查询，不实现 IM 补字段、发送或正式确认；持久候选发送意图不证明送达。
+本表是交付边界，不是工单状态表。r4 的 Adapter／本地分层资格已独立交付；用户随后选择「MagicChat 私聊」，授权 r5 软件装配，并另行选择下述有界真实测试包。持久发送意图、软件测试或脚本启动均不证明送达或整个 Release 完成。
 
 | 阶段 | Accord 消费目标 | 前置与验收边界 |
 | --- | --- | --- |
 | 本地消费与 Adapter 协议验证（已授权） | 固定 CQA wire／用量、SQLite 受理与恢复、不可变输入及实际 Adapter 的受控协议请求／响应和候选校验 | 复用已有模块，不接管 R003/R004 数据库或 SAS wire；按第 7 节验证适用本地行为。协议替身不证明实际 Run／挂载／权限或模型通过 |
 | 合成接缝资格（按需，未授权） | 独立 R005 Operation → 精确文件 → 实际 Run → 完整候选持久化 | 仅用冻结 X1 extractive 组合、无模型／IM；须新增执行授权及输入／控制通路实证。若不能提前消除缺项，不额外恢复旧 X1 演示；不替代受管查询或完整 Release |
-| 受管查询接缝（未授权） | 消费第 8 节已接受 S2 查询组合，验证真实 DRAFT_READY、无依据及 Accord 重启查回原 Run／重收同一结果 | 取得本次 runtime／模型执行授权，重新冻结部署、有效配置、资料与输入／控制／输出事实。查回和重收不能通过新建 CQA command 冒充业务完成重放；不要求重复交付已接受查询 |
+| 受管查询接缝（本次有界测试已授权，实际符合性待证） | 消费第 8 节已接受 S2 查询组合，验证真实候选及原 Run 查询/重收 | 按本次运行包冻结部署、有效配置、资料与输入／控制／输出事实。查回和重收不能通过新建 CQA command 冒充业务完成重放；不要求重复交付已接受查询 |
 | 后续部署可靠性（G3 用户延期） | 同宿主、跨容器及新 sandbox 的已完成业务结果重放 | G3 保持 `DEFERRED_BY_USER`，由 CQA 拥有其验收；不作为本次受管查询接缝前置，也不删除私有持久挂载预检、完成回执或 UNKNOWN 保护 |
-| 私聊与正式确认（未授权） | 接现有 MagicChat，完成补字段、候选答复、精确确认和原会话导出 | 真实 actor／App／Conversation 与发送确认语义获准并验证；完成 C01–C19 的适用真实场景。前几阶段完成不能标整个 Release 完成 |
+| 私聊与正式确认（软件及本次有界测试已授权） | 新 MagicChat App/私聊补字段、候选答复、精确确认和原会话导出 | 启动前冻结实际 actor/App/Conversation，验证协议及发送确认；取得真实查询接缝证据后执行适用私聊场景。不得代用户批准，未执行的故障场景必须单列 |
 
 真实联调前须证明本次冻结交付、每 Operation 输入／volume、可达鉴权控制通路、首次响应丢失的 exact-label 查回、完整输出以及运行／模型／IM 对应权限。操作员证据文件的本地校验不替代实际部署符合性；缺项时相应真实阶段 BLOCKED，真实 R005 仍 NOT_RUN，不阻塞已授权本地软件工作。
 
@@ -285,7 +297,7 @@ X1 历史运行候选的证据入口是 [§9.6 双轴审查与封存](/Users/yet
 
 - 既有 operator-owned OS 无网／秘密最小化文件边界必须在解释仓库 shell 前建立；私有 TMPDIR、只读离线 cache、精确工具链、launcher/profile 哈希和 BOUNDARY 证据仍必需。没有该边界不得运行资格流程，不能设置 marker 或把普通 CI 当作替代。
 - 构建、静态检查、R003/R004、能力拒绝回归和纯 CQA wire 测试继续使用原 Node Permission Model 与 runtime guard，不授予全局 `fs.read`/`fs.write`。
-- 仅 `r005-input.test`、`r005-cqa.integration.test`、`cqa-run-service.integration.test` 在同一 OS 边界中以清空继承环境的固定命令运行，保留 runtime guard，不叠加 Node Permission Model。该层需支持私有输入与证据的 fsync／hard link／符号链接拒绝场景和祖先目录元数据核验；不得扩大到通用无权限限制的执行入口。
+- r4 的 `r005-input.test`、`r005-cqa.integration.test`、`cqa-run-service.integration.test`，以及 r5 使用同一真实文件能力的 `r005-magicchat.integration.test`、`r005-live-driver.integration.test`，在同一 OS 边界中以清空继承环境的固定命令运行，保留 runtime guard，不叠加 Node Permission Model。该层支持私有输入与证据的 fsync／hard link／符号链接拒绝场景和祖先目录元数据核验；仅新增这两个私聊文件系统回归入口，不扩大到通用无权限限制的执行入口。其余入口保持受限。
 - 普通 CI 仍为 non-qualification；独立执行上述命令只能证明本地行为，不能产生 operator 资格。若实际 OS profile 或精确版本执行证据缺失，资格状态保持 NOT_RUN／未证明，不假设 profile 兼容。
 - 恢复／取消、一次 Start、查询预算、输入不可变、来源／输出校验及旧库拒绝不变。验证方式的取舍不创造业务运行权限；未来调整本层须重新绑定本 Spec 与 runner，并重跑能力边界及文件场景。
 - 移除此例外的条件：所选 Node 版本能在相同受限权限下通过真实文件场景、祖先核验及越界拒绝验证，再恢复统一受限执行；不为假想兼容性提前改写生产 API。
@@ -295,6 +307,16 @@ X1 历史运行候选的证据入口是 [§9.6 双轴审查与封存](/Users/yet
 G1／G2 仅继承[固定验收摘要][cqa-s2-accepted]覆盖的组合和边界。目录例外精确为 `GET /admin/v1/catalog/compliance-readonly?format=md&grpc=true` 返回 401、分类 `UNAVAILABLE_AUTH_DENIED`；不豁免 Search 认证、其他 401 或管理旁路。新部署须在运行授权中明确接受该策略，不升权补目录。受测平台 scheduler 关闭，原 scheduler 测试失败保留，不扩展到调度或宣称平台全套通过。平台补丁保留 AGPL 义务，须引用对应源码／生成输入，不仅依赖未公开二进制。
 
 真实验收前另行提交有界运行包，列明资源／网络、独立凭据引用和权限风险、冻结候选／有效配置、每个新请求和模型调用上限、停止／保留及清理对象。优先合并正常查询与响应丢失／重启查回观察，不额外模型探活；异常变体优先本地验证。新建／重启、真实凭据读取、模型外发和目录例外均以该运行授权为准，不借用 X1 批准或恢复旧 CQA 环境。软件可以独立交付，但必须报告真实接缝 NOT_RUN。
+
+### 本次有界私聊测试授权
+
+用户在明确列出权限、费用和停止范围的问题中选择「授权该测试包」。独立[授权记录](/Users/yet/.local/share/accord-local-evidence/r005-merge80-jhjhxh10/private-chat-run-authorization.json)绑定[原运行包](/Users/yet/.local/share/accord-local-evidence/r005-merge80-jhjhxh10/private-chat-run-proposal.json)（SHA-256 `307838c1b471bec6859070ccc5737951bfba729ea3b4e372409c2aa727597a6e`），不改写其原提案状态来制造执行事实。
+
+- 允许唯一新 Issue/PR、精确提交审查/CI/隔离资格后正常合并，再部署独立 R005 测试资源；不绕过保护。
+- 本次窗口最多 2 小时、3 次新 CQA 查询/模型调用，仅 synthetic、`baizhi-chat/grok-4.6`，可能收费；不自动替换/补跑或额外模型探活。操作员最多使用一次真实查询冒烟，其余供用户；正式接受只能由用户点击。
+- 新 daemon/OctoBus/guest、网络、数据库和证据按运行包独立创建；控制端点仅 loopback `127.0.0.1:27410`，复用现有 MagicChat 服务但新建 creator-visible App/私聊，不接管旧 owner。只读取获准的选定 Baizhi 凭据，新建其余凭据；值不进入仓库/日志。
+- 保留高权限 daemon 控制风险、精确 catalog-only 401 例外和 G3 延期；不放宽 Search、实际输入/挂载/输出证明或 UNKNOWN 规则，不修改 CQA/平台代码。
+- 到期/停止仅处理本次新资源并保留未知操作、数据库、输入、回执与证据；不停止旧 MagicChat/SAS 或清理旧 CQA。监督进程能力、实际 MagicChat 来源/协议及新有效配置须在启动前核验，缺失则阻塞对应真实动作，不伪造观测或运行资格。
 
 本修订不改变事实所有权或新增通用平台决定，沿用 ADR-0006；改用另一控制通路、放宽 source／permission 或补丁能力时，须回到相应 ADR／Release 决策者。本地实施授权不形成新的业务运行权限。
 

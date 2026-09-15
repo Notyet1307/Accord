@@ -23,9 +23,9 @@ flowchart LR
     T -. sas.dialogue/v1 合同 .-> X[SAS 真实对话服务：待实现]
     X -. 无工具运行、查询恢复：待验证 .-> R[SAS 执行器]
   end
-  subgraph R005["R005：CQA 受管 Adapter / 本地协议验证"]
-    Q[受信结构化查询与单次授权] --> CQ[R005CqaConsumer]
-    CQ <--> DB[独立 SQLite r005_cqa / snapshot 2]
+  subgraph R005["R005：CQA 私聊软件 / 实际运行单独取证"]
+    Q[绑定 App 私聊 / 明确字段与单次授权] --> CQ[R005CqaConsumer]
+    CQ <--> DB[独立 SQLite r005_cqa / snapshot 3]
     CQ --> I[每 Operation 不可变输入文件]
     CQ <--> CP[CqaRunPort]
     CP <--> AD[CqaRunServiceAdapter / Connect JSON]
@@ -45,7 +45,7 @@ flowchart LR
 | R004 两轮对话 | [R004Dialogue](../src/driver/r004-dialogue.ts)：receive → advance → flush | 独立数据库中的 receipt、Case、Operation、候选结果与待发送回复 | 只接受 `mode=offline`；固定一用户/私聊/助手；不是启动即能使用的聊天应用 |
 | SAS 对话消费合同 | [TypeScript 合同](../src/contracts/sas-dialogue.ts)，SAS 独立树中的 request/result schema | `answer`、`needs_input`、`triage_proposal`，关联原 Operation 与上下文版本 | schema 与样例通过不证明 SAS 已有 HTTP handler 或可信无工具配置 |
 | SAS 输入与研判 | 外部 SAS 仓库：Run API、输入准备与显式提交、executor | SAS Run、输入 Artifact/Evidence、研判结果 | 输入闭环已交付；实际字节交付和研判 v2 是后续范围，详见报告 |
-| R005 持久查询消费 | [R005CqaConsumer](../src/driver/r005-cqa.ts)：accept → advance / collect → snapshot | 独立 `r005_cqa` 聚合、冻结 Operation、Case 投影、原 Run 引用、候选意图、有界审计 | 完整结构化输入；仅 offline 测试端，未装配 Runtime 或 IM |
+| R005 持久查询消费 | [R005CqaConsumer](../src/driver/r005-cqa.ts)：receive / accept → advance / collect → flush | 独立 `r005_cqa` 聚合、消息 receipt、Case、冻结 Operation、候选、精确 Artifact/choice、发送确认、有界审计 | [live launcher](../scripts/run-r005.mjs) 显式装配真实 MagicChat 和 RunService；本地协议通过不证明部署 |
 | CQA 结果资格 | [cqa-query](../src/contracts/cqa-query.ts) | 严格 JSON、Go 摘要、冻结 synthetic 来源、精度安全用量 | 不复制 CQA 检索/生成，不制造人工批准或法规资格 |
 | R005 输入准备 | [r005-input](../src/driver/r005-input.ts) | 私有逐操作目录、0400 文件、精确字节和只读挂载计划 | POSIX、受信同 UID/root 准备者；同路径的 daemon/Engine 映射只是离线计划，不是实际挂载证明 |
 
@@ -76,6 +76,6 @@ Conversation 是沟通容器；Case 是正在解决的一件事；Accord Operati
 
 取消意图与结果状态分别持久保存：未知 Run ID 唯一查回后仍提交原 StopRun；即使结果已因取消而过期，或在收集与取消之间重启，也不会丢弃尚未发送的取消意图。取消仍受原权限、绝对截止和一次尝试限制。
 
-SQL 表形状仍为 schema 1，r3 状态快照为 version 2；拒绝旧 version 1，不迁移旧 Release 库。Binding 或状态摘要漂移时拒绝启动。输入只允许精确字节恢复，不覆盖冲突文件；受管 Grant 和离线 Grant 不互换。候选声明映射为 Accord Entry ID，待发送身份持久保存但没有发送端；没有已接受 Artifact、审批或送达事实。
+SQL 表形状仍为 schema 1，r5 状态快照为 version 3；拒绝 version 1/2，不迁移旧库。Binding、私聊授权或状态摘要漂移拒绝启动。输入只允许精确字节恢复；managed/offline Grant 不互换。候选声明映射为 Accord Entry ID；只有实际且新鲜的单选响应能接受完整预览的精确 Artifact。自由文本不批准，未知发送不自动重发或按正文恢复；相关消息确认之前不宣称送达。
 
-具体 Adapter 已实现，本地消费与协议行为有[验证记录](development.md)；默认 HTTP/TLS 通路、真实动态挂载、控制鉴权和独立输出收集仍 NOT_RUN。原生 HTTP 只在真实发送时加载，runtime guard 保持不变。按用户选择的[分层资格边界](specs/r005-compliance-query-consumption.md#本地资格验证的分层边界)，仅 R005 文件系统测试不叠加 Node Permission Model，仍需 operator-owned OS 隔离；生产输入的 fsync、祖先核验和不可变语义不变，其余受限检查不变。分层命令的本地通过不代表 operator 资格，实际运行及 MagicChat/人工确认仍按第 9 节另行授权，不恢复旧 SAS/X1 环境。
+Adapter、私聊 consumer 和显式 launcher 已实现；[本地验证](development.md)、operator 资格及真实 HTTP/TLS、挂载、控制鉴权、独立输出、IM/人工确认分别记录。真实部署必须满足消费合同第 9 节的独立运行授权，缺证据仍为 NOT_RUN。按[分层边界](specs/r005-compliance-query-consumption.md#本地资格验证的分层边界)，五个 R005 文件系统测试依赖 operator-owned OS 隔离和 runtime guard；其余受限检查不变，不恢复旧 SAS/X1 环境。

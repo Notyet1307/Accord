@@ -575,11 +575,11 @@ test("local preflight rejection remains safely accepted across restart with zero
   } finally { consumer.close(); env.cleanup(); }
 });
 
-test("version 1 state is refused read-only without migration", () => {
+test("pre-chat version 2 state is refused read-only without migration", () => {
   const env = environment();
   try {
     const consumer = new R005CqaConsumer(env.path, env.binding, env.clock);
-    const state = { ...consumer.snapshot(), version: 1 }; consumer.close();
+    const state = { ...consumer.snapshot(), version: 2 }; consumer.close();
     const database = new DatabaseSync(env.path); const body = JSON.stringify(state);
     database.prepare("UPDATE r005_cqa SET body=?,digest=?").run(body, cqaSha256(body)); database.close();
     const walPath = `${env.path}-wal`;
