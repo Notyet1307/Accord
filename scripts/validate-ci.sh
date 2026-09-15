@@ -87,5 +87,6 @@ env -i \
 
 "$NPM_BIN" run test:conformance
 "$NODE_BIN" --test dist/test/r004-dialogue.integration.test.js
+"$NPM_BIN" run test:r005
 
 printf '%s\n' "PASS $CI_VALIDATION_KIND CI typecheck, handoff, contract, integration, capability, and conformance suites"
