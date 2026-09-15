@@ -1,13 +1,15 @@
 # 当前工作入口
 
-这是跨会话导航，不拥有任务状态或实施授权。最近只读核验：2026-09-11；开始工作时重新核对链接目标与 Git。
+这是跨会话导航，不拥有任务状态或实施授权。当前授权更新：2026-09-14；开始工作时核对链接目标，Git 操作须另获授权。
 
-- 本地当前增量：[R004/r1](../product/releases/r004-sas-conversational-agent-pilot.md)，目标是让固定 SAS 事件研判助手通过 IM 沟通完成任务；架构决定见 [ADR-0004](../adr/0004-sas-conversational-agent-boundary.md)。
-- 当前合同：[R004-DIALOGUE/r1](../specs/r004-sas-contact-dialogue.md)。当前只落地离线两轮对话消费接缝；真实聊天服务尚未接通。
-- 交付基线：`2668ee62f249d462930bd980c8178ce5f24f7f6e`；R004 离线实现、Release/ADR 与开发文档由 [#77](https://github.com/Notyet1307/Accord/issues/77) 关联 PR 交付。精确 head、检查及合并状态查 PR；SAS 合同及跨仓工作树位置见旧快照，使用前重新核验。
-- 正式任务入口：[#77](https://github.com/Notyet1307/Accord/issues/77)（R004 离线切片交付）；其他工作查 [Accord Issues](https://github.com/Notyet1307/Accord/issues)。核对实际状态与评论后选择任务；历史 C4 #44 和 Driver #72 不作为新任务入口，不凭空填写编号。
+- 当前 Accepted 增量：[R005/r1](../product/releases/r005-compliance-query-conversational-pilot.md)，边界见 [ADR-0006](../adr/0006-r005-compliance-query-consumer-boundary.md) 与 [ADR-0005](../adr/0005-r005-candidate-response-and-trial-trust.md)，产品决定不变。
+- 当前唯一合同：[R005-CQA/r4](../specs/r005-compliance-query-consumption.md)，Status ACCEPTED。用户先选择「接受 r3，并实施 Adapter 及其本地协议验证」，接受前提案 SHA-256 `67954b0b7f457a02afba9f29f9bd602a6d917610940f77e282f6337020e703e2`；随后选择「采用分层验证」，该第 9 节本地资格 runner／合同增量单独编号为 r4。业务行为合同不变，独立执行授权见下条；R003/R004 运行及资格入口的既有保护不变。
+- 本次独立执行授权：用户在「继续下一步」后明确选择「本地提交并执行资格」，允许仅提交 R005/r4 相关变更，在新资格目录按既有隔离策略固化 launcher/profile，核验实际拒绝探针并执行完整无网资格。范围见[实际授权记录](/Users/yet/.local/share/accord-qualification/r005-r4-4eb9hd6b/evidence/authorization.json)；结果与精确 candidate/Spec 摘要归[本次资格证据目录](/Users/yet/.local/share/accord-qualification/r005-r4-4eb9hd6b/evidence)，没有对应执行记录不得推断通过。不推送、不创建 Issue/PR、不读取真实凭据、不调用真实服务；不扩大到生产、CQA／平台修改或资源部署。
+- 历史 R004 交付基线：`2668ee62f249d462930bd980c8178ce5f24f7f6e`；原离线实现由 [#77](https://github.com/Notyet1307/Accord/issues/77) 关联 PR 交付。精确远端 head、检查及合并状态查 GitHub；不把它作为 R005 任务或资格。
+- 本次 R005 仅在本地分支冻结候选并执行上述无网资格，未发布工单/PR或推送。远端任务查 [Accord Issues](https://github.com/Notyet1307/Accord/issues)，获准发布时再固定单一任务入口；不复用历史 C4 #44、Driver #72 或 R004 #77。
 - 历史验证：[本机 manifest](/Users/yet/.local/share/accord-local-evidence/r004-dialogue-nscum4mz/manifest.json) 与 [CI 日志](/Users/yet/.local/share/accord-local-evidence/r004-dialogue-nscum4mz/ci.log)。旧 manifest 记录 314 项离线通过，含 11 项 R004，只证明原受测版本。2026-09-11 调查未重跑或重新核验原始日志，不作为当前脏树、实际 IM/模型或 operator qualification 的通过记录。
-- 后续候选：[首个外部只读合规智能体闭环草案](../handoff-receipt-2026-09-11.md)，暂名 R005，未批准，不替换 R004。文档修补批准不代表接受该 Release 或授权实现。下一技术建议是其中 X1：固定 agent-compose 命令式运行、持久身份、结果查询/取消和 OctoBus 权限合同；实施前另行确认范围。
+- 生产者交接：CQA [PR #4](https://github.com/Notyet1307/compliance-query-agent/pull/4) 已合并，当前选定交付为 `499af50675ab4355158eaf943fcb42c56b8c09fe`；[固定验收摘要](https://github.com/Notyet1307/compliance-query-agent/blob/499af50675ab4355158eaf943fcb42c56b8c09fe/evidence/s2-query/accepted-summary.json) 记录真实查询／synthetic 草稿已获用户接受、G1／G2 有界通过、G3 用户延期。不能再以旧工作树 NOT_RUN 阻塞已完成查询，也不能把其扩大为整个 S2、Accord 或运行授权。CQA 保持单写者；原 [2026-09-11 回执](../handoff-receipt-2026-09-11.md) 保留为历史快照。
+- R005 本地实现入口：[持久 consumer](../../src/driver/r005-cqa.ts)、[RunService Adapter](../../src/transports/cqa-run-service.ts)、[wire/来源校验](../../src/contracts/cqa-query.ts)、[不可变输入](../../src/driver/r005-input.ts)。[r4 文档与证据修正记录](/Users/yet/.local/share/accord-local-evidence/r005-r4-oozc07q6/manifest.json) 保留当时确切 r4 合同与文件摘要，并引用[原分层验证 manifest](/Users/yet/.local/share/accord-local-evidence/r005-fsync-ug91dwko/manifest.json) 的实际运行：367/367 非资格 CI、8/8 受限 wire 测试、44/44 文件系统命令块和缺少 pre-shell 边界时的拒绝；WAL 回归要求主库不变且无 frame。上述旧记录不重新绑定本次提交；本次完整资格必须读取独立执行记录。[r3 Adapter manifest](/Users/yet/.local/share/accord-local-evidence/r005-r3-eu99ecz0/manifest.json) 和更早记录保留原绑定。仅 R005 文件系统测试采用 OS 边界加 runtime guard，其余入口保留 Node Permission Model，见[开发验证](../development.md)。真实 R005 Runtime／模型／IM 仍 NOT_RUN，G3 保持 `DEFERRED_BY_USER`，不代表 Release 完成。
 - 接管必读：[实际架构](../architecture.md) → [开发验证](../development.md) → [2026-09-11 接管回执](../handoff-receipt-2026-09-11.md)。跨仓旧状态保留在 [2026-09-10 快照](../handoff-receipt.md)，使用时重新核验。
 - 选择 Matt 方法时读 [Skill 使用衔接](../agents/skill-usage.md)，术语有歧义时读 [词表](../../CONTEXT.md)。
 

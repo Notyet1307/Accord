@@ -262,6 +262,17 @@ run_node_restricted --test-isolation=none --test dist/test/frozen-runtime-config
 run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js
 run_node_restricted --test-isolation=none --test dist/test/r004-dialogue.integration.test.js
+run_node_restricted --test-isolation=none --test dist/test/cqa-query.test.js
+# R005 filesystem tests require fsync, ancestor metadata and symlink fixtures.
+# The operator-owned pre-shell OS boundary remains mandatory; retain the runtime guard.
+env -i \
+  PATH="$VALIDATION_PATH" \
+  TMPDIR="$VALIDATION_TMPDIR" \
+  LANG=C.UTF-8 \
+  "$NODE_BIN" \
+  --import="$VALIDATION_SNAPSHOT/scripts/runtime-capability-guard.mjs" \
+  --test-isolation=none \
+  --test dist/test/r005-input.test.js dist/test/r005-cqa.integration.test.js dist/test/cqa-run-service.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

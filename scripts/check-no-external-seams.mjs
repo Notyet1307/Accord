@@ -25,6 +25,10 @@ const requiredValidationEntrypoints = [
   "scripts/run-r003.mjs",
   "test/r003-driver.integration.test.ts",
   "test/r004-dialogue.integration.test.ts",
+  "test/cqa-query.test.ts",
+  "test/r005-input.test.ts",
+  "test/r005-cqa.integration.test.ts",
+  "test/cqa-run-service.integration.test.ts",
   "scripts/runtime-capability-guard.mjs",
   "scripts/validate-ci.sh",
   "scripts/validate-delivery.sh",
@@ -67,6 +71,7 @@ const requiredInvocationMarkers = new Map([
       "dist/test/reviewer-target.integration.test.js",
       "dist/test/r003-driver.integration.test.js",
       '"$NODE_BIN" --test dist/test/r004-dialogue.integration.test.js',
+      '"$NPM_BIN" run test:r005',
       '"$NPM_BIN" run test:conformance',
     ],
   ],
@@ -103,6 +108,17 @@ const requiredInvocationMarkers = new Map([
       "run_node_restricted --test-isolation=none --test dist/test/reviewer-target.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/r003-driver.integration.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/r004-dialogue.integration.test.js",
+      "run_node_restricted --test-isolation=none --test dist/test/cqa-query.test.js",
+      [
+        'env -i \\',
+        '  PATH="$VALIDATION_PATH" \\',
+        '  TMPDIR="$VALIDATION_TMPDIR" \\',
+        '  LANG=C.UTF-8 \\',
+        '  "$NODE_BIN" \\',
+        '  --import="$VALIDATION_SNAPSHOT/scripts/runtime-capability-guard.mjs" \\',
+        '  --test-isolation=none \\',
+        '  --test dist/test/r005-input.test.js dist/test/r005-cqa.integration.test.js dist/test/cqa-run-service.integration.test.js',
+      ].join("\n"),
       "run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js",
       "run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js",
       'contracts/r003-magicchat-handoff.json',
@@ -137,7 +153,7 @@ const javascriptForbidden = [
   ],
 ];
 
-const transportPaths = new Set(["src/transports/magicchat-websocket.ts", "src/transports/baizhi-responses.ts"]);
+const transportPaths = new Set(["src/transports/magicchat-websocket.ts", "src/transports/baizhi-responses.ts", "src/transports/cqa-run-service.ts"]);
 
 /** Parse imports rather than exempting a directory; the virtual-source seam tests transitive bypasses. */
 export function inspectTransportDependencies(sources) {
@@ -300,7 +316,9 @@ for (const file of files) {
   if (file.path !== policySource) {
     for (const [pattern, description] of javascriptForbidden) {
       const permittedFetch = file.path === "src/transports/baizhi-responses.ts" && description === "direct network API call" && !pattern.test(source.replace(/\bglobalThis\.fetch\s*\(/gu, "transportSend("));
-      if (pattern.test(source) && file.path !== capabilityRegression && !permittedFetch && !(file.path === "scripts/run-r003.mjs" && description === "secret-like file read")) {
+      const permittedCqaNetwork = file.path === "src/transports/cqa-run-service.ts" && description === "direct network module import" &&
+        !pattern.test(source.replace(/\bimport\s*\(\s*["']node:https?["']\s*\)/gu, 'import("node:buffer")'));
+      if (pattern.test(source) && file.path !== capabilityRegression && !permittedFetch && !permittedCqaNetwork && !(file.path === "scripts/run-r003.mjs" && description === "secret-like file read")) {
         failures.push(`${file.path}: ${description}`);
       }
     }

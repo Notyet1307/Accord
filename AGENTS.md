@@ -158,7 +158,7 @@ These require the transactional or otherwise explicitly selected authority defin
 
 ## 7. Current Release fence
 
-R004 is the current accepted increment, limited to the SAS conversational pilot in `docs/product/releases/r004-sas-conversational-agent-pilot.md` and ADR-0004. The first locally authorized task is `docs/specs/r004-sas-contact-dialogue.md`; this does not authorize live services or production.
+R005 is the current accepted increment, owned by `docs/product/releases/r005-compliance-query-conversational-pilot.md` and ADR-0005/0006. For R005 implementation or authorization, read the accepted `R005-CQA/r4` in `docs/specs/r005-compliance-query-consumption.md`: the user authorized Adapter implementation and local protocol verification on the existing offline consumer, then selected layered local qualification validation; the latter contract increment is numbered r4. This does not authorize live Runtime/model/IM, real credential access, resource/network provisioning, CQA/platform changes, publication, or Git operations. The Spec binds the accepted r3 proposal hash and preserves historical evidence without reattestation; local software verification is not runtime qualification. R004 retains its original SAS Release, ADR-0004 and Spec; R003/R004 code, databases and evidence are not migrated into R005.
 
 The following R003 fence remains binding for R003 code and records. Its accepted boundary is owned by:
 
