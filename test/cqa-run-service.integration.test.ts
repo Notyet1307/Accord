@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { cqaCorpusDigest, cqaSha256, parseCqaCorpus } from "../src/contracts/cqa-query.js";
-import { cqaBindingDigest, R005CqaConsumer, type CqaAcceptance, type CqaBinding, type CqaFrozenOperation } from "../src/driver/r005-cqa.js";
+import { cqaBindingDigest, R005CqaConsumer, type CqaAcceptance, type CqaBinding, type CqaChatConfiguration, type CqaFrozenOperation } from "../src/driver/r005-cqa.js";
 import { CqaRunServiceAdapter, type CqaHttpSender } from "../src/transports/cqa-run-service.js";
+import { DeterministicMagicChatSimulator } from "../src/magicchat/simulator.js";
+import type { MagicChatTransport } from "../src/transports/magicchat-websocket.js";
+import { magicChatMessageCreatedEnvelope } from "./fixture.js";
 
 const corpus = parseCqaCorpus(readFileSync(new URL("../../test/fixtures/r005-s2-corpus.json", import.meta.url)));
 const credential = { reference: "r005-control", revision: "test-v1", value: "synthetic-control-value-not-a-real-token" };
@@ -224,4 +227,59 @@ test("redirect rejection consumes one Start and protocol errors do not trigger a
     consumer.accept(f.input()); assert.equal(await consumer.advance(f.adapter()), "unknown"); assert.equal(f.calls.length, 1);
     assert.equal(JSON.stringify(consumer.snapshot()).includes(credential.value), false);
   } finally { consumer.close(); f.cleanup(); }
+});
+
+test("real Adapter and driver resume acknowledged pending input after a stale successful Run", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-09-15T12:00:00Z") });
+  // @ts-expect-error Explicit JavaScript launcher uses dist modules and has no import-time execution.
+  const { runR005LiveDriver } = await import("../../scripts/run-r005.mjs");
+  const f = fixture(); f.binding.appId = "00000000-0000-4000-8000-000000000005";
+  const consumer = new R005CqaConsumer(f.path, f.binding, f.clock);
+  const chat: CqaChatConfiguration = { schemaVersion: "accord.r005-chat/v1", authorizationId: "synthetic-chat-trial",
+    authorizationRevision: "r5", expiresAt: f.clock() + 120_000,
+    magicChat: { transportVersion: "accord.magicchat-websocket-transport/v2", endpoint: "wss://synthetic.invalid/api/app/ws",
+      credentialRef: "r005-chat", credentialRevision: "test-v1" } };
+  consumer.configureChat(chat);
+  const simulator = new DeterministicMagicChatSimulator({ appId: f.binding.appId, firstMessageSequence: 3 });
+  const message = (sequence: number, body: string) => {
+    const wire = magicChatMessageCreatedEnvelope({ body, conversationId: f.binding.conversationId, actorId: f.binding.actorId,
+      messageId: `input-${sequence}`, envelopeEventId: `event-${sequence}`, messageSequence: sequence, cursor: sequence,
+      messageCreatedAt: new Date(f.clock()).toISOString() });
+    return { ...wire, payload: { ...wire.payload, message: { ...wire.payload.message, summary: "Synthetic input" } } };
+  };
+  const until = async (predicate: () => boolean) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (predicate()) return;
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    assert.fail("real Adapter did not reach expected state");
+  };
+  const first = message(1, "问题:等保备案需要哪些材料？\n主题:mlps\n日期:2026-09-11\n地区:CN\n行业:all");
+  simulator.observeUserMessage(first); consumer.receive(first);
+  await consumer.flush(async request => { consumer.receive(simulator.respond(request, new Date(f.clock()).toISOString())); });
+  const old = consumer.snapshot().operations[0]!;
+  let receive: (wire: unknown) => void = () => assert.fail("not connected");
+  const controller = new AbortController();
+  const done = runR005LiveDriver({ consumer, port: f.adapter(), configuration: { schemaVersion: "accord.r005-live/v1", binding: f.binding, chat },
+    signal: controller.signal, connect: async (handler: (wire: unknown) => void): Promise<MagicChatTransport> => {
+      receive = handler;
+      return { closed: Promise.withResolvers<string>().promise, close: () => undefined,
+        send: async request => { receive(simulator.respond(request, new Date(f.clock()).toISOString())); } };
+    } });
+  try {
+    await until(() => f.calls.some(call => call.method === "StartAgentRun"));
+    const followup = message(2, "补充后的备案问题？"); simulator.observeUserMessage(followup); receive(followup);
+    await until(() => f.calls.some(call => call.method === "GetRun") && consumer.snapshot().chat!.sends.some(item => item.state === "sent"));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    f.complete(old.frozen, old.fingerprint);
+    f.tick(); t.mock.timers.tick(5000);
+    await until(() => consumer.snapshot().operations[0]!.state === "expired");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    f.tick(); t.mock.timers.tick(5000);
+    await until(() => f.calls.filter(call => call.method === "StartAgentRun").length === 2);
+    const next = consumer.snapshot().operations[1]!;
+    assert.equal(next.frozen.request.question, "补充后的备案问题？");
+    assert.equal(next.frozen.request.caseId, old.frozen.request.caseId);
+    assert.equal(consumer.snapshot().operations[0]!.candidate, undefined);
+  } finally { controller.abort(); await done; consumer.close(); f.cleanup(); }
 });
