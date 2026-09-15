@@ -26,7 +26,7 @@ export interface SocketOptions {
   readonly skipUTF8Validation: false;
 }
 export type SocketFactory = (url: string, options: SocketOptions) => MagicChatSocket;
-export interface MagicChatTransportConfig { readonly transportVersion?: typeof MAGICCHAT_TRANSPORT_VERSION | typeof MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION; readonly url: string; readonly appId: string; readonly credential: string; }
+export interface MagicChatTransportConfig { readonly transportVersion?: typeof MAGICCHAT_TRANSPORT_VERSION | typeof MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION; readonly textContract?: "r005"; readonly url: string; readonly appId: string; readonly credential: string; }
 export interface MagicChatTransport {
   /** Submits synchronously; resolves only after a correlated response passes the receiver. */
   send(request: MagicChatRequestEnvelope): Promise<void>;
@@ -79,6 +79,7 @@ export async function connectMagicChatTransport(
   signal?: AbortSignal,
 ): Promise<MagicChatTransport> {
   if ((config.transportVersion ?? MAGICCHAT_TRANSPORT_VERSION) !== (signal === undefined ? MAGICCHAT_TRANSPORT_VERSION : MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION)) fail("MAGICCHAT_TRANSPORT_VERSION_MISMATCH");
+  if (config.textContract !== undefined && config.textContract !== "r005") fail("MAGICCHAT_TEXT_CONTRACT_INVALID");
   if (signal?.aborted) fail("MAGICCHAT_ABORTED");
   const url = configUrl(config);
   const credential = config.credential;
@@ -177,7 +178,7 @@ export async function connectMagicChatTransport(
       const text = typeof data === "string" ? data : new TextDecoder("utf-8", { fatal: true }).decode(data);
       const value: unknown = JSON.parse(text);
       if (JSON.stringify(value).includes(JSON.stringify(credential).slice(1, -1))) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
-      normalizeMagicChatEnvelope(value);
+      normalizeMagicChatEnvelope(value, config.textContract);
       const envelope = value as Record<string, unknown>;
       let replyTo: string | undefined;
       if (envelope["kind"] === "response") {

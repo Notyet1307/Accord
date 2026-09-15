@@ -272,7 +272,7 @@ env -i \
   "$NODE_BIN" \
   --import="$VALIDATION_SNAPSHOT/scripts/runtime-capability-guard.mjs" \
   --test-isolation=none \
-  --test dist/test/r005-input.test.js dist/test/r005-cqa.integration.test.js dist/test/cqa-run-service.integration.test.js
+  --test dist/test/r005-input.test.js dist/test/r005-cqa.integration.test.js dist/test/cqa-run-service.integration.test.js dist/test/r005-magicchat.integration.test.js dist/test/r005-live-driver.integration.test.js
 run_node_restricted --allow-child-process --test-isolation=none --test dist/test/synthetic-intake.conformance.test.js
 run_node_restricted --test-isolation=none --test dist/test/magicchat-protocol.conformance.test.js
 

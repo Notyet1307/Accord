@@ -2,8 +2,8 @@
 
 - Status：ACCEPTED；Revision：r1；2026-09-11。
 - Decision owner：产品负责人。
-- 接受来源：用户此前在明确列出 Release r1、ADR-0006 r1、R005-CQA/r2 及首个离线范围的问题中选择「接受并实施离线切片」。Release 产品决定保持 r1；2026-09-14 用户进一步选择「接受 r3，并实施 Adapter 及其本地协议验证」，随后选择「采用分层验证」，其本地资格合同增量编号为 r4；原提案摘要及当前唯一行为合同见 [R005-CQA/r4](../../specs/r005-compliance-query-consumption.md)。
-- R005 是当前 Accepted Release。软件实施范围包含既有离线消费基础上的 Adapter、本地协议验证及已选择的本地资格 runner／合同分层修正；真实 Runtime／模型／IM、真实凭据读取、资源／网络部署、CQA／平台修改、发布或 Git 操作仍须单独授权。R003/R004 的边界及历史证据不变，X1 一次性执行授权不转移；该软件范围不是新增业务运行许可。
+- 接受来源：用户先后选择「接受并实施离线切片」「接受 r3，并实施 Adapter 及其本地协议验证」「采用分层验证」，随后明确选择「MagicChat 私聊」。Release 产品决定保持 r1；当前唯一行为合同为 [R005-CQA/r5](../../specs/r005-compliance-query-consumption.md)。
+- R005 是当前 Accepted Release。软件范围包含持久消费、受管 Adapter、私聊/正式确认装配和分层本地资格。发布、真实 Runtime/模型/IM、凭据及资源操作仍依据消费合同第 9 节引用的独立用户授权和实际记录；不是生产或 CQA/平台修改许可。R003/R004 边界与历史证据不变，X1 一次性授权不转移。
 
 ## 产品承诺
 
@@ -28,11 +28,11 @@
 
 无依据/待复核应明确显示未解决项；旧上下文结果、重复/错绑结果、未知执行和发送确认丢失不能被显示为成功。只有 CLI 成功、技术接缝提取答复、离线模拟、X1 通过或单独模型试验通过，均不足以证明本 Release 完成。
 
-逐项行为、失败和验收由 [R005-CQA/r4](../../specs/r005-compliance-query-consumption.md) 的 C01–C19 所有，不在本 Release 复制第二份矩阵。本地 Adapter 交付不缩减完整 Release 要求。
+逐项行为、失败和验收由 [R005-CQA/r5](../../specs/r005-compliance-query-consumption.md) 的 C01–C19 所有，不在本 Release 复制第二份矩阵。软件交付不缩减完整 Release 要求。
 
 ## 承接、并行与准入
 
-1. 本 Release 和 [ADR-0006](../../adr/0006-r005-compliance-query-consumer-boundary.md) 的已接受决定不变；当前获准实施范围为 Adapter 及其本地协议验证。每次仍按 Delivery Gate 固定一个主 Owner／主接缝。
+1. 本 Release 和 [ADR-0006](../../adr/0006-r005-compliance-query-consumer-boundary.md) 的已接受决定不变；当前获准软件范围包括私聊装配。每次仍按 Delivery Gate 固定一个主 Owner／主接缝。
 2. CQA 已交付并获接受的 S2 查询／synthetic 草稿切片由消费合同第 8 节固定，G1／G2 仅继承该组合的有界资格。CQA 保持单写者；Accord 不重复要求生产者交付已完成查询，也不改写原真实资料 AC。
 3. G3 同宿主持久完成结果重放由用户延期，按消费合同第 9 节保留为后续部署可靠性验收，不阻塞当前查询切片；持久挂载预检和 UNKNOWN 不新建替代 Run 的保护不变。
 4. 真实受管查询接缝须另获运行授权并证明输入／控制／输出事实，再接私聊／正式确认。按需 extractive 接缝不替代模型目标；分阶段准入以消费合同第 9 节为准，软件切片或旧生产者试验通过均不能标整个 Release 完成。

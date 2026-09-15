@@ -63,7 +63,7 @@ Agent Runtime 或执行工作空间负责回答：
 | 哪些能力有证据、旧任务怎样处理 | [接管回执（2026-09-11 快照）](docs/handoff-receipt-2026-09-11.md) |
 | 长期产品方向 | [Vision](docs/product/VISION.md) |
 
-外部合规查询里程碑暂名 R005，仍为[未批准提案](docs/handoff-receipt-2026-09-11.md)，不替换 R004。R004 当前只有本地离线两轮对话实现，真实 SAS 对话服务尚未接通。R003 的实际联调记录不代表 R004 已可使用。开发授权与交付规则见 [delivery gate](docs/agents/delivery-gate.md)；GitHub 拥有任务状态，本页只做导航。
+当前 Accepted 增量为 [R005 合规查询对话试点](docs/product/releases/r005-compliance-query-conversational-pilot.md)，唯一行为合同见 [R005-CQA/r5](docs/specs/r005-compliance-query-consumption.md)。私聊软件、实际部署与人工验收分别取证，当前执行入口见 [current](docs/work/current.md)。R004 的 SAS 对话仍为独立离线实现；R003 的联调记录不证明其他 Release 已可使用。开发授权与交付规则见 [delivery gate](docs/agents/delivery-gate.md)，GitHub 拥有任务状态。
 
 ---
 
