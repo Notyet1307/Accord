@@ -789,10 +789,16 @@ export class R005CqaConsumer {
       if (selected.state !== "unknown") return selected.state;
       const query = this.#change((state, now) => {
         const operation = this.#operation(state, id);
-        if (!operation.recoveryAllowed || now >= operation.frozen.deadline || operation.queries >= 6 ||
-          (operation.lastQueryAt !== undefined && now - operation.lastQueryAt < 5000)) return undefined;
+        if (!operation.recoveryAllowed || now >= operation.frozen.deadline || operation.queries >= 6) return undefined;
+        // A verified identity lets the remaining reads wait for execution, not bypass result proof.
+        const interval = operation.runId !== undefined && operation.lastQueryAt !== undefined
+          ? Math.max(5000, Math.floor((operation.frozen.deadline - operation.lastQueryAt - 5000) / (6 - operation.queries)))
+          : 5000;
+        if (operation.lastQueryAt !== undefined && now - operation.lastQueryAt < interval) return undefined;
         operation.recoveryStartedAt ??= now;
-        const remaining = Math.min(operation.frozen.deadline, operation.recoveryStartedAt + 30_000) - now;
+        const remaining = (operation.runId === undefined
+          ? Math.min(operation.frozen.deadline, operation.recoveryStartedAt + 30_000)
+          : operation.frozen.deadline) - now;
         if (remaining <= 0) return undefined;
         operation.queries++; operation.lastQueryAt = now;
         return { operation: structuredClone(operation), remaining };

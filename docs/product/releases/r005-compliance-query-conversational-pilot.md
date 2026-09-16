@@ -2,7 +2,7 @@
 
 - Status：ACCEPTED；Revision：r1；2026-09-11。
 - Decision owner：产品负责人。
-- 接受来源：用户先后选择「接受并实施离线切片」「接受 r3，并实施 Adapter 及其本地协议验证」「采用分层验证」「MagicChat 私聊」「修复并继续测试」及「修复协议并继续测试」。Release 产品决定保持 r1；当前唯一行为合同为 [R005-CQA/r7](../../specs/r005-compliance-query-consumption.md)。
+- 接受来源：用户先后选择「接受并实施离线切片」「接受 r3，并实施 Adapter 及其本地协议验证」「采用分层验证」「MagicChat 私聊」「修复并继续测试」「修复协议并继续测试」及「修复并用最后额度验证」。Release 产品决定保持 r1；当前唯一行为合同为 [R005-CQA/r8](../../specs/r005-compliance-query-consumption.md)。
 - R005 是当前 Accepted Release。软件范围包含持久消费、受管 Adapter、私聊/正式确认装配和分层本地资格。发布、真实 Runtime/模型/IM、凭据及资源操作仍依据消费合同第 9 节引用的独立用户授权和实际记录；不是生产或 CQA/平台修改许可。R003/R004 边界与历史证据不变，X1 一次性授权不转移。
 
 ## 产品承诺
@@ -28,7 +28,7 @@
 
 无依据/待复核应明确显示未解决项；旧上下文结果、重复/错绑结果、未知执行和发送确认丢失不能被显示为成功。只有 CLI 成功、技术接缝提取答复、离线模拟、X1 通过或单独模型试验通过，均不足以证明本 Release 完成。
 
-逐项行为、失败和验收由 [R005-CQA/r7](../../specs/r005-compliance-query-consumption.md) 的 C01–C19 所有，不在本 Release 复制第二份矩阵。软件交付不缩减完整 Release 要求。
+逐项行为、失败和验收由 [R005-CQA/r8](../../specs/r005-compliance-query-consumption.md) 的 C01–C20 所有，不在本 Release 复制第二份矩阵。软件交付不缩减完整 Release 要求。
 
 ## 承接、并行与准入
 

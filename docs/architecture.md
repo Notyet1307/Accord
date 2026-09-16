@@ -4,7 +4,7 @@
 
 ## 各 Release 的证据不互换
 
-R003 已有受控真实联调记录；R004 和 R005 目前各有独立离线切片。不能把一条路径的 live 成功当作另一条已接通，也不能让不同 owner 同时协调同一 Conversation。
+R003 已有受控真实联调记录；R004 保留独立离线切片。R005 的软件交付与实际试点回执沿[当前入口](work/current.md)分别核验，生产者成功不等于 Accord 候选或私聊闭环通过。不能把一条路径的 live 成功当作另一条已接通，也不能让不同 owner 同时协调同一 Conversation。
 
 ```mermaid
 flowchart LR
@@ -72,9 +72,9 @@ Conversation 是沟通容器；Case 是正在解决的一件事；Accord Operati
 
 ## R005 的失败与恢复
 
-受理事务成功后才准备文件；本地 preflight 通过后进入持久“可能已提交”，至多一次 Start。每次 advance 至多一个物理 RPC；Start/List Summary 只保存 pendingRunId，下一次 Get 验证完整 labels 和 Run/sandbox 才绑定原身份。首次回执丢失只查回原身份，零/多匹配、原 Run 丢失及平台 canceled 保持 UNKNOWN。List 与 Get 分别持久扣次，共六次、间隔至少 5 秒；10 秒单次/30 秒恢复/120 秒绝对上限不能互相延长。取消 ACK 不表示远端 Search/模型停止；缺失完整运行/输出证明不妨碍取消已核验的原 Run，但不产生候选。
+受理事务成功后才准备文件；本地 preflight 通过后进入持久“可能已提交”，至多一次 Start，无自动重试或替代 Run。每次 advance 至多一个物理 RPC；Start/List Summary 只保存 pendingRunId，下一次 Get 验证完整 labels 和 Run/sandbox 才绑定原身份。首次回执丢失只查回原身份，零/多匹配、原 Run 丢失及平台 canceled 保持 UNKNOWN。List 与 Get 调用前分别持久扣次，共六次、间隔至少 5 秒，重启不返还次数。[R005-CQA/r8 第 5 节](specs/r005-compliance-query-consumption.md#5-runtime-提交查询与-unknown)区分身份恢复与正常等待：未核验身份（含 pendingRunId）仍受首次读取起三十秒限制；完整身份已核验且原 runId 已持久保存后，剩余读取分布到原至多一百二十秒截止，末次预留五秒完成 RPC／收集，不新开窗口。单次 RPC 仍至多十秒且不超过适用剩余时间；缺失完整运行/输出证明不妨碍收集或取消已核验的原 Run，但不产生候选。
 
-取消意图与结果状态分别持久保存：未知 Run ID 唯一查回后仍提交原 StopRun；即使结果已因取消而过期，或在收集与取消之间重启，也不会丢弃尚未发送的取消意图。取消仍受原权限、绝对截止和一次尝试限制。
+取消意图与结果状态分别持久保存：未知 Run ID 唯一查回后仍提交原 StopRun；即使结果已因取消而过期，或在收集与取消之间重启，也不会丢弃尚未发送的取消意图。StopRun 仍受原三十秒取消／恢复边界、权限、绝对截止和一次尝试限制；取消 ACK 不表示远端 Search/模型停止。
 
 SQL 表形状仍为 schema 1，r5 状态快照为 version 3；拒绝 version 1/2，不迁移旧库。Binding、私聊授权或状态摘要漂移拒绝启动。输入只允许精确字节恢复；managed/offline Grant 不互换。候选声明映射为 Accord Entry ID；只有实际且新鲜的单选响应能接受完整预览的精确 Artifact。自由文本不批准，未知发送不自动重发或按正文恢复；相关消息确认之前不宣称送达。
 
