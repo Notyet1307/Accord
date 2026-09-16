@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { cqaCorpusDigest, cqaSha256, parseCqaCorpus } from "../src/contracts/cqa-query.js";
 import { cqaBindingDigest, R005CqaConsumer, type CqaAcceptance, type CqaBinding, type CqaChatConfiguration, type CqaFrozenOperation } from "../src/driver/r005-cqa.js";
@@ -60,7 +60,6 @@ function fixture() {
       assert.equal(run["command"], command.join(" ")); assert.equal(run["cleanupPolicy"], "RUN_SANDBOX_CLEANUP_POLICY_KEEP_RUNNING");
       assert.equal(run["env"], undefined); assert.equal(run["payloadJson"], undefined); assert.equal(run["prompt"], undefined);
       const operationId = String(run["clientRequestId"]);
-      assert.deepEqual(run["volumes"], [{ type: "VOLUME_MOUNT_TYPE_BIND", source: `/engine/accord-inputs/${operationId}`, target: "/opt/accord-cqa-input", readOnly: true }]);
       const summary = { runId: `run-${operationId}`, sandboxId: "test-sandbox", projectId: run["projectId"], agentName: run["agentName"], source: run["source"], status: "RUN_STATUS_RUNNING" };
       summaries.set(String(summary.runId), summary);
       details.set(String(summary.runId), { summary, labels: run["labels"], imageRef: `compliance-query-agent-guest@sha256:${binding.guestImageSha256}` });
@@ -116,6 +115,52 @@ function fixture() {
     adapter: () => new CqaRunServiceAdapter(binding, credential, send), drop: () => { dropStart = true; },
     intercept: (fn: NonNullable<typeof intercept>) => { intercept = fn; }, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("per-run volume replacement keeps the executable, config and writable receipt beside immutable input", async () => {
+  const f = fixture(); const consumer = new R005CqaConsumer(f.path, f.binding, f.clock);
+  try {
+    const sources = new Map<string, string>();
+    for (const name of ["payload", "inputs", "receipts"]) {
+      const path = join(f.root, `runtime-${name}`); mkdirSync(path, { mode: 0o700 }); sources.set(`/s2/${name}`, path);
+    }
+    writeFileSync(join(sources.get("/s2/payload")!, "compliance-agent"), "synthetic executable");
+    writeFileSync(join(sources.get("/s2/inputs")!, "config.json"), "synthetic-protocol-config");
+    const accepted = consumer.accept(f.input());
+    sources.set(`/engine/accord-inputs/${accepted.frozen.operationId}`, accepted.frozen.input.directory);
+    f.intercept((method, request) => {
+      if (method !== "StartAgentRun") return undefined;
+      // The pinned runtime replaces project volumes with this entire list; it does not merge them.
+      const run = request["run"] as { volumes: { source: string; target: string; readOnly: boolean }[] };
+      const mounts = new Map(run.volumes.map(mount => [mount.target, mount]));
+      const file = (guestPath: string, write = false): string => {
+        const mount = mounts.get(dirname(guestPath));
+        if (!mount || !sources.has(mount.source)) throw new Error("MOUNT_MISSING");
+        if (write && mount.readOnly) throw new Error("MOUNT_READ_ONLY");
+        return join(sources.get(mount.source)!, guestPath.slice(dirname(guestPath).length + 1));
+      };
+      try {
+        assert.equal(readFileSync(file("/opt/cqa/compliance-agent"), "utf8"), "synthetic executable");
+        assert.equal(readFileSync(file("/s2/inputs/config.json"), "utf8"), "synthetic-protocol-config");
+        assert.equal(readFileSync(file("/opt/accord-cqa-input/request.json"), "utf8"), accepted.frozen.requestBytes);
+        for (const path of ["/opt/cqa/compliance-agent", "/s2/inputs/config.json", "/opt/accord-cqa-input/request.json"]) {
+          assert.throws(() => file(path, true), /MOUNT_READ_ONLY/);
+        }
+        writeFileSync(file("/s2/receipts/completed.json", true), accepted.frozen.inputDigest);
+      } catch {
+        return new Response(JSON.stringify({ code: "failed_precondition", message: "Required runtime filesystem unavailable" }),
+          { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      return undefined;
+    });
+    await consumer.advance(f.adapter());
+    assert.equal(consumer.snapshot().operations[0]!.pendingRunId, "run-query-1");
+    assert.equal(readFileSync(join(sources.get("/s2/receipts")!, "completed.json"), "utf8"), accepted.frozen.inputDigest);
+    f.complete(accepted.frozen, accepted.fingerprint);
+    assert.equal(await consumer.advance(f.adapter()), "complete");
+    assert.equal(consumer.snapshot().responses[0]!.state, "ready");
+    assert.equal(f.calls.filter(call => call.method === "StartAgentRun").length, 1);
+  } finally { consumer.close(); f.cleanup(); }
+});
 
 test("real consumer and Connect adapter bind immutable input, one model candidate and no-evidence without duplicate publication", async () => {
   const f = fixture(); const consumer = new R005CqaConsumer(f.path, f.binding, f.clock); const adapter = f.adapter();

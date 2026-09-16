@@ -158,7 +158,7 @@ These require the transactional or otherwise explicitly selected authority defin
 
 ## 7. Current Release fence
 
-R005 is the current accepted increment, owned by `docs/product/releases/r005-compliance-query-conversational-pilot.md` and ADR-0005/0006. Read the accepted `R005-CQA/r5` in `docs/specs/r005-compliance-query-consumption.md`: it adds the explicitly selected MagicChat private-chat assembly to the delivered Adapter and layered local qualification contract. Software tests do not prove live deployment. Publication, credential access, resources and model calls require the separate bounded user authorization and actual records referenced in Spec section 9; never infer production authority or CQA/platform modification permission. R004 retains its original SAS Release, ADR-0004 and Spec; R003/R004 code, databases and evidence are not migrated into R005.
+R005 is the current accepted increment, owned by `docs/product/releases/r005-compliance-query-conversational-pilot.md` and ADR-0005/0006. Read the accepted `R005-CQA/r6` in `docs/specs/r005-compliance-query-consumption.md`: it retains the private-chat assembly and layered qualification contract, and fixes the Adapter's complete per-Run mount set. Software tests do not prove live deployment. Publication, credential access, resources and model calls require the separate bounded user authorization and actual records referenced in Spec section 9; never infer production authority or CQA/platform modification permission. R004 retains its original SAS Release, ADR-0004 and Spec; R003/R004 code, databases and evidence are not migrated into R005.
 
 The following R003 fence remains binding for R003 code and records. Its accepted boundary is owned by:
 

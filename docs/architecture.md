@@ -78,4 +78,6 @@ Conversation 是沟通容器；Case 是正在解决的一件事；Accord Operati
 
 SQL 表形状仍为 schema 1，r5 状态快照为 version 3；拒绝 version 1/2，不迁移旧库。Binding、私聊授权或状态摘要漂移拒绝启动。输入只允许精确字节恢复；managed/offline Grant 不互换。候选声明映射为 Accord Entry ID；只有实际且新鲜的单选响应能接受完整预览的精确 Artifact。自由文本不批准，未知发送不自动重发或按正文恢复；相关消息确认之前不宣称送达。
 
+每次 managed Start 显式传入完整 payload/config/receipt/input 四项挂载；平台会整组替换而非合并项目挂载。程序、配置与本 Operation 输入只读，仅私有回执可写；源路径坐标和实际逐 Run 证明由[消费合同](specs/r005-compliance-query-consumption.md#每-operation-的不可变输入交付)所有。
+
 Adapter、私聊 consumer 和显式 launcher 已实现；[本地验证](development.md)、operator 资格及真实 HTTP/TLS、挂载、控制鉴权、独立输出、IM/人工确认分别记录。真实部署必须满足消费合同第 9 节的独立运行授权，缺证据仍为 NOT_RUN。按[分层边界](specs/r005-compliance-query-consumption.md#本地资格验证的分层边界)，五个 R005 文件系统测试依赖 operator-owned OS 隔离和 runtime guard；其余受限检查不变，不恢复旧 SAS/X1 环境。

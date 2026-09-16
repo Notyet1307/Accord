@@ -1,7 +1,7 @@
 # ADR-0006：R005 固定合规查询的消费边界
 
 - Status：ACCEPTED；Revision：r1；2026-09-11；Decision owner：产品负责人。
-- Source Release：[R005](../product/releases/r005-compliance-query-conversational-pilot.md)；行为唯一合同：[R005-CQA/r5](../specs/r005-compliance-query-consumption.md)。
+- Source Release：[R005](../product/releases/r005-compliance-query-conversational-pilot.md)；行为唯一合同：[R005-CQA/r6](../specs/r005-compliance-query-consumption.md)。
 - 接受来源：用户此前选择「接受并实施离线切片」，接受本 ADR r1；2026-09-14 进一步选择「接受 r3，并实施 Adapter 及其本地协议验证」，随后选择「采用分层验证」，其本地资格合同增量编号为 r4。原提案摘要及软件范围由消费合同所有；本 ADR 的 owner／接缝／控制通路决定与 ADR-0005 两项取舍不变，不形成新业务权限。本 ADR 不授予真实 Runtime／模型／IM、真实凭据读取、资源部署、CQA／平台修改、发布或 Git 操作权限；独立执行须有实际用户授权及对应记录。
 
 ## 问题
