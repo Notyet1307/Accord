@@ -436,6 +436,27 @@ export function parseMagicChatMessagesListPayload(value: unknown): MagicChatMess
   return Object.freeze({ limit, messages: Object.freeze(messages) });
 }
 
+/** Ephemeral display metadata: never a reliable event or business input. */
+export function validateMagicChatConversationStatus(value: unknown): void {
+  const envelope = asRecord(value, "conversation.status envelope");
+  requireExactObjectKeys(envelope, ["v", "id", "kind", "event", "payload"], "conversation.status envelope");
+  if (envelope["v"] !== MAGICCHAT_PROTOCOL_VERSION || envelope["kind"] !== "event" || envelope["event"] !== "conversation.status") {
+    throw new TypeError("invalid conversation.status envelope");
+  }
+  parseStableIdentifier(envelope["id"], "conversation.status event ID");
+  const payload = asRecord(envelope["payload"], "conversation.status payload");
+  requireExactObjectKeys(payload, ["conversation_id", "status", "sender"], "conversation.status payload");
+  parseStableIdentifier(payload["conversation_id"], "conversation.status conversation ID");
+  const sender = asRecord(payload["sender"], "conversation.status sender");
+  requireExactObjectKeys(sender, ["id", "type"], "conversation.status sender");
+  parseStableIdentifier(sender["id"], "conversation.status sender ID");
+  if (sender["type"] !== "user" && sender["type"] !== "app") throw new TypeError("invalid conversation.status sender type");
+  const status = payload["status"];
+  if (typeof status !== "string" || !status.isWellFormed() || !status || trimMagicChatText(status) !== status || [...status].length > 32) {
+    throw new TypeError("conversation.status must contain 1–32 trimmed Unicode characters");
+  }
+}
+
 export function normalizeMagicChatEnvelope(value: unknown, textContract: "r003" | "r004" | "r005" = "r003"): NormalizedMagicChatEnvelope {
   const envelope = asRecord(value, "MagicChat App WebSocket envelope");
   if (envelope["v"] !== MAGICCHAT_PROTOCOL_VERSION) {
@@ -536,7 +557,12 @@ export function normalizeMagicChatEnvelope(value: unknown, textContract: "r003" 
     parseStableIdentifier(source["id"], "source message ID");
     parsePositiveInteger(source["seq"], "source message sequence");
   }
-  parseWireString(message["summary"], "message summary");
+  if (textContract === "r005") {
+    const summary = message["summary"];
+    if (typeof summary !== "string" || !summary.isWellFormed() || [...summary].length > 5_005) {
+      throw new TypeError("R005 message summary must be bounded Unicode protocol text");
+    }
+  } else parseWireString(message["summary"], "message summary");
   const replyToMessageId =
     message["reply_to_message_id"] === undefined
       ? undefined

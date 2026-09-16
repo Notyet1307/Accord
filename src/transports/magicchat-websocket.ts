@@ -1,4 +1,4 @@
-import { normalizeMagicChatEnvelope, parseMagicChatMessageBody } from "../contracts/magicchat.js";
+import { normalizeMagicChatEnvelope, parseMagicChatMessageBody, validateMagicChatConversationStatus } from "../contracts/magicchat.js";
 import type { MagicChatRequestEnvelope } from "../magicchat/adapter.js";
 
 export const MAGICCHAT_CANCELLABLE_TRANSPORT_VERSION = "accord.magicchat-websocket-transport/v2";
@@ -178,8 +178,12 @@ export async function connectMagicChatTransport(
       const text = typeof data === "string" ? data : new TextDecoder("utf-8", { fatal: true }).decode(data);
       const value: unknown = JSON.parse(text);
       if (JSON.stringify(value).includes(JSON.stringify(credential).slice(1, -1))) fail("MAGICCHAT_CREDENTIAL_REFLECTION");
-      normalizeMagicChatEnvelope(value, config.textContract);
       const envelope = value as Record<string, unknown>;
+      if (config.textContract === "r005" && envelope["event"] === "conversation.status") {
+        validateMagicChatConversationStatus(value);
+        return;
+      }
+      normalizeMagicChatEnvelope(value, config.textContract);
       let replyTo: string | undefined;
       if (envelope["kind"] === "response") {
         const id = envelope["reply_to"];
