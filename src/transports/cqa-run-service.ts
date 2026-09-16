@@ -178,7 +178,12 @@ export class CqaRunServiceAdapter implements CqaRunPort {
     const response = await this.#rpc("StartAgentRun", { run: { projectId: b.runtime.projectId, agentName: b.runtime.agentName,
       source: b.runtime.source, command: COMMAND, clientRequestId: operation.operationId,
       cleanupPolicy: "RUN_SANDBOX_CLEANUP_POLICY_KEEP_RUNNING", ...(b.runtime.sandboxId ? { sandboxId: b.runtime.sandboxId } : {}),
-      volumes: [{ type: "VOLUME_MOUNT_TYPE_BIND", source: join(m.engineInputRoot, operation.operationId), target: "/opt/accord-cqa-input", readOnly: true }],
+      // Nonempty per-run volumes replace the project's complete mount set.
+      volumes: [
+        { type: "VOLUME_MOUNT_TYPE_BIND", source: "/s2/payload", target: "/opt/cqa", readOnly: true },
+        { type: "VOLUME_MOUNT_TYPE_BIND", source: "/s2/inputs", target: "/s2/inputs", readOnly: true },
+        { type: "VOLUME_MOUNT_TYPE_BIND", source: "/s2/receipts", target: "/s2/receipts", readOnly: false },
+        { type: "VOLUME_MOUNT_TYPE_BIND", source: join(m.engineInputRoot, operation.operationId), target: "/opt/accord-cqa-input", readOnly: true }],
       labels: { [OP_LABEL]: operation.operationId, [FP_LABEL]: fingerprint } } }, signal);
     return { pendingRunId: id(this.#summary(response["run"])["runId"]) };
   }

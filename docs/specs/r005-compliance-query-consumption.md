@@ -1,8 +1,8 @@
 # R005：固定合规查询结果的受管消费合同
 
-- Revision：`R005-CQA/r5`；Status：ACCEPTED（私聊软件装配范围）；2026-09-15。
-- 授权来源：r4 的 Adapter／分层资格已由 PR #80 交付。用户随后要求「合并 然后部署 我要测试」，并在明确说明尚无运行装配、需要补实现的选项中选择「MagicChat 私聊」：先接通真实 CQA 查询，再补私聊提问、候选回复及确认。该选择授权本修订的私聊软件装配；不制造实际运行、模型调用或人工确认的通过记录。此前 r2–r4 的授权与证据保留其原修订绑定。
-- 本修订沿用本合同的完整私聊行为，补齐 R005 自有消息接收、字段收集、候选回复、精确 choice 确认与 live launcher。部署供手工测试是当前执行目标；实际资源、独立凭据引用、网络、模型调用上限与窗口须先按第 9 节冻结为有界运行包并取得对应授权。不得借用 X1 的旧授权、启动旧 CQA 环境或接管 R003/R004 会话与数据库。
+- Revision：`R005-CQA/r6`；Status：ACCEPTED（完整 Run 挂载修复范围）；2026-09-16。
+- 授权来源：r4 Adapter／分层资格由 PR #80 交付，r5 私聊装配由 PR #82 交付。真实非查询预检发现显式 Run volumes 覆盖项目挂载后，用户选择「修复并继续测试」，授权本次额外修复交付及第 9 节的新有界运行包。原 r2–r5 授权、提交和证据保持各自绑定，不制造运行或人工确认通过记录。
+- 本修订沿用 r5 已交付的消息接收、字段收集、候选、精确 choice 与 live launcher，只修复 Adapter 的完整 Run 挂载集合。主 Owner、wire、SQLite schema/snapshot、输出资格、一次 Start 和恢复预算不变；不改 CQA／平台代码，不增加替代运行通路。
 - Objective：用户与固定合规资料研究员完成一次有来源的只读查询及补充，获得明确标记的候选答复；选择正式接受/导出时，由本人确认精确 Artifact。
 - Authoritative inputs：已接受的 [R005 Release](../product/releases/r005-compliance-query-conversational-pilot.md)、[ADR-0006](../adr/0006-r005-compliance-query-consumer-boundary.md)、[ADR-0005/r1](../adr/0005-r005-candidate-response-and-trial-trust.md)；[ADR-0002](../adr/0002-production-coordination-runtime-language.md) 的协调语言；[Delivery Gate](../agents/delivery-gate.md)；下述固定生产者源码及执行记录。R003/R004 的实现、库及原 ADR 边界不变。
 - Owner：Accord Coordinator。Producer：经认证的 MagicChat 输入、agent-compose 运行记录、CQA 候选内容、操作员冻结的合成来源快照、实际人工决定。Consumer：Case 与原私聊用户。
@@ -55,10 +55,12 @@ R005 使用独立的单进程 SQLite/WAL 文件和既有单聚合事务模式：
 1. 先提交第 2 节事务，再物化该 Operation 的输入。Accord 从已接受字节生成独占文件，不让多个请求覆盖同一个共享 `request.json`；文件和父目录只允许受信准备者写入。
 2. 文件创建采用不覆盖已有内容的原子流程并落盘。重启遇到已有文件只允许精确字节/摘要匹配；不匹配、符号链接、权限过宽或不明归属立即停止，不删掉重建来掩盖冲突。未进入“可能已提交”状态时，可继续完成相同已接受输入的本地准备；不能据此重新提交外部运行。
 3. 部署合同必须区分 Accord 写入位置、daemon 可见的 bind source、Docker Engine 解析位置和 guest 固定 target。只映射本 Operation 所需输入，guest 只读；不暴露整个仓库、其他 Operation、HOME 或秘密。固定配置/回执路径不能随操作目录意外变化并改变 configDigest。
-4. 固定 Run 请求支持 `volumes`，但 X1 只验证了操作员预置目录；per-run volume、既有 sandbox 的挂载复用及串行相邻请求的隔离仍须在另获准的真实部署实测。操作员在提交前验证固定 CQA payload、配置、私有回执挂载和输入映射方式，冻结第 5 节证据；缺少提交前证据时零 Start。既有 sandbox 忽略新 volumes、复用上一请求或映射缺失均不得提交候选。回执到达后核对实际 Run/sandbox 与冻结约束；此时才发现漂移则拒绝候选并保留实际调用／UNKNOWN，不能倒写为 Start/Search 为零。
+4. 固定平台在 Run 请求含非空 `volumes` 时整组替换项目挂载，不进行增量合并。Adapter 每次 Start 必须显式发送完整四项：daemon 可见 `/s2/payload` → guest `/opt/cqa`（只读）、`/s2/inputs` → `/s2/inputs`（只读）、`/s2/receipts` → `/s2/receipts`（读写），以及冻结 `engineInputRoot/<operationId>` → `/opt/accord-cqa-input`（只读）。前三项使用本固定部署布局，输入仍按独立路径坐标冻结；仅回执可写，不扩大为整个 `/s2`、输入根目录或其他 Operation。操作员在提交前核验这些 source 的实际 host 映射、字节和权限，并冻结第 5 节证据；缺证据时零 Start。逐 Run 再核对实际完整挂载，漂移则拒绝候选并保留实际调用／UNKNOWN，不能倒写为 Start/Search 为零；既有 sandbox 复用不是缺挂载时的绕过方式。
 5. `prepareCqaInput` 完成后再次核对当前上下文、授权、Binding、文件与路径映射，并调用只读本地 `preflight(operation, fingerprint)`；通过后才持久进入“可能已提交”并发一次 Start。预检失败保留可安全继续本地准备的已受理状态，零 Start；Adapter 的直接 start 入口也必须预检，不以此发额外 RPC。已提交或未知的输入不自动清理；保留期限和定向删除纳入运行清单，不等同于 CQA 回执保留策略。
 
 固定六项 argv 为 `/opt/cqa/compliance-agent`、`query`、`--config`、`/s2/inputs/config.json`、`--input`、`/opt/accord-cqa-input/request.json`；Adapter 只将这组字面量映射成平台 command 字符串。请求内容不进入命令、env 或 `payload_json`；不新增 shell 包装器，不把 stdin 能力当成平台已支持的透传。原 CQA `/s2/inputs/requests/*.json` 预置演示不能证明每 Operation 映射。
+
+r6 对应 C16 的回归必须覆盖平台“整组替换”语义：固定程序/配置可读、本 Operation 输入只读、私有回执可写；删除静态挂载或错配权限不能获得候选。不得继续用“只有一个请求挂载”的协议断言固定错误实现。本地协议验证和新部署的实际挂载预检分别取证，后者不能由 fixture 代替。
 
 ## 3. CQA wire 映射：复用 v1，不发明新字段
 
@@ -317,6 +319,12 @@ G1／G2 仅继承[固定验收摘要][cqa-s2-accepted]覆盖的组合和边界�
 - 新 daemon/OctoBus/guest、网络、数据库和证据按运行包独立创建；控制端点仅 loopback `127.0.0.1:27410`，复用现有 MagicChat 服务但新建 creator-visible App/私聊，不接管旧 owner。只读取获准的选定 Baizhi 凭据，新建其余凭据；值不进入仓库/日志。
 - 保留高权限 daemon 控制风险、精确 catalog-only 401 例外和 G3 延期；不放宽 Search、实际输入/挂载/输出证明或 UNKNOWN 规则，不修改 CQA/平台代码。
 - 到期/停止仅处理本次新资源并保留未知操作、数据库、输入、回执与证据；不停止旧 MagicChat/SAS 或清理旧 CQA。监督进程能力、实际 MagicChat 来源/协议及新有效配置须在启动前核验，缺失则阻塞对应真实动作，不伪造观测或运行资格。
+
+### 挂载修复后的追加授权
+
+用户选择「修复并继续测试」的[实际授权记录](/Users/yet/.local/share/accord-r005-live/pilot-01/evidence/mount-repair-authorization.json)允许一个额外的 Accord Adapter 修复 Issue/PR，精确提交独立审查、CI／隔离资格及正常合并后，再新建隔离运行资源并固定新的最多 2 小时窗口。总计最多 3 次 synthetic CQA 查询／模型调用，操作员最多一次，模型仍为 `baizhi-chat/grok-4.6`；不自动补跑，不代用户接受产物。
+
+复用仅限本次新建的 R005 测试账号、creator-only App 和私聊；失败 pilot-01 的资源、输入与证据保留，不恢复旧 CQA/X1 环境或借用其数据库。此前限定读取当前 MagicChat `ADMIN_PASSWORD` 只用于创建这个新测试账号的[授权记录](/Users/yet/.local/share/accord-r005-live/pilot-01/evidence/admin-read-authorization.json)不扩大为管理员密码重置、旧账号修改或其他秘密访问。实际 Actor/App/Conversation、网络排序、未重叠地址、有效配置、输入／控制／输出事实和截止时间须在新运行包中重新冻结；原失败窗口不自动延长。
 
 本修订不改变事实所有权或新增通用平台决定，沿用 ADR-0006；改用另一控制通路、放宽 source／permission 或补丁能力时，须回到相应 ADR／Release 决策者。本地实施授权不形成新的业务运行权限。
 
