@@ -147,6 +147,96 @@ test("R005 transport selects raw question bytes without changing R003 or R004 te
   finally { controller.abort(); transport.close(); }
 });
 
+test("R005 multiline summaries preserve the question and complete one durable query through the transport", async t => {
+  const f = fixture(t), consumer = new R005CqaConsumer(f.database, f.binding);
+  t.after(() => consumer.close()); consumer.configureChat(f.configuration.chat);
+  const socket = new Socket(), question = "等保备案期限？\n需要哪些材料？";
+  const connecting = connectMagicChatTransport({ textContract: "r005", url: f.configuration.chat.magicChat.endpoint,
+    appId: f.binding.appId, credential: f.credentials["r005-chat"] }, wire => { consumer.receive(wire); }, () => socket);
+  socket.emit("open"); const transport = await connecting; t.after(() => transport.close());
+  for (const [index, body] of [question, "主题：mlps\n日期：2026-09-11\n地区：CN\n行业：all"].entries()) {
+    const input = magicChatMessageCreatedEnvelope({ body, actorId: f.binding.actorId, conversationId: f.binding.conversationId,
+      messageId: `multiline-${index}`, envelopeEventId: `multiline-event-${index}`, cursor: index + 1,
+      messageSequence: index + 1, messageCreatedAt: new Date().toISOString() });
+    const wire = { ...input, payload: { ...input.payload, message: { ...input.payload.message, summary: body } } };
+    socket.emit("message", JSON.stringify(wire), false);
+    await until(() => consumer.snapshot().chat!.messages.length === index + 1);
+    if (index === 0) assert.equal(consumer.snapshot().operations.length, 0);
+  }
+  const snapshot = consumer.snapshot();
+  assert.equal(snapshot.operations.length, 1);
+  assert.equal(snapshot.operations[0]!.frozen.request.question, question);
+  assert.equal(snapshot.operations[0]!.frozen.request.asOfDate, "2026-09-11");
+  assert.equal(snapshot.operations[0]!.state, "accepted");
+});
+
+test("R005 transient statuses have no durable or ACK effects and do not block later reliable input", async t => {
+  const f = fixture(t), consumer = new R005CqaConsumer(f.database, f.binding);
+  t.after(() => consumer.close()); consumer.configureChat(f.configuration.chat);
+  const before = consumer.snapshot(), socket = new Socket(), sent: string[] = [];
+  socket.send = (bytes, callback) => { sent.push(bytes); callback(); };
+  const connecting = connectMagicChatTransport({ textContract: "r005", url: f.configuration.chat.magicChat.endpoint,
+    appId: f.binding.appId, credential: f.credentials["r005-chat"] }, wire => { consumer.receive(wire); }, () => socket);
+  socket.emit("open"); const transport = await connecting; t.after(() => transport.close());
+  for (const status of ["正在输入", "原".repeat(32), "😀".repeat(32), "\uFEFF"]) {
+    const wire = { v: 1, kind: "event", id: "ephemeral-status", event: "conversation.status",
+      payload: { conversation_id: f.binding.conversationId, status, sender: { id: f.binding.actorId, type: "user" } } };
+    socket.emit("message", JSON.stringify(wire), false);
+    socket.emit("message", JSON.stringify(wire), false);
+  }
+  await turn();
+  assert.deepEqual(consumer.snapshot(), before);
+  await consumer.flush(request => transport.send(request));
+  assert.deepEqual(sent, []);
+  const input = magicChatMessageCreatedEnvelope({ body: "等保备案期限？", actorId: f.binding.actorId,
+    conversationId: f.binding.conversationId, messageCreatedAt: new Date().toISOString() });
+  socket.emit("message", JSON.stringify(input), false);
+  await until(() => consumer.snapshot().chat!.messages.length === 1);
+  assert.equal(consumer.snapshot().chat!.cursor, input.cursor);
+  assert.equal(consumer.snapshot().operations.length, 0);
+});
+
+test("R005 summary repair retains Unicode bounds and the legacy rejection policy", () => {
+  const input = magicChatMessageCreatedEnvelope({ body: "等保备案期限？" });
+  const summary = "多行\n摘要";
+  const wire = { ...input, payload: { ...input.payload, message: { ...input.payload.message, summary } } };
+  for (const mode of ["r003", "r004"] as const) assert.throws(() => normalizeMagicChatEnvelope(wire, mode), TypeError);
+  for (const invalid of [null, "\ud800", "😀".repeat(5006)]) {
+    const rejected = { ...wire, payload: { ...wire.payload, message: { ...wire.payload.message, summary: invalid } } };
+    assert.throws(() => normalizeMagicChatEnvelope(rejected, "r005"), TypeError);
+  }
+  wire.payload.message.summary = "😀".repeat(5005);
+  assert.equal(normalizeMagicChatEnvelope(wire, "r005").kind, "MESSAGE_CREATED");
+});
+
+test("R005 transient status recognition does not admit malformed or reliable-looking events", async () => {
+  const status = { v: 1, kind: "event", id: "status", event: "conversation.status",
+    payload: { conversation_id: "conversation", status: "正在输入", sender: { id: "actor", type: "user" } } };
+  for (const [wire, selected] of [
+    [status, false],
+    [{ ...status, cursor: 1 }, true],
+    [{ ...status, v: 2 }, true],
+    [{ ...status, kind: "request" }, true],
+    [{ ...status, event: "unknown.event" }, true],
+    [{ ...status, payload: { ...status.payload, status: "\u0085" } }, true],
+    [{ ...status, payload: { ...status.payload, status: "原".repeat(33) } }, true],
+    [{ ...status, payload: { ...status.payload, status: "\ud800" } }, true],
+    [{ ...status, payload: { ...status.payload, sender: { id: "actor", type: "agent" } } }, true],
+    [{ ...status, payload: { ...status.payload, sender: { id: "actor", type: "user", authority: true } } }, true],
+  ] as const) {
+    const socket = new Socket(); let delivered = false;
+    const connecting = connectMagicChatTransport({ ...(selected ? { textContract: "r005" as const } : {}),
+      url: "wss://synthetic.invalid/api/app/ws", appId: "00000000-0000-4000-8000-000000000005",
+      credential: "synthetic-chat-canary-005" }, () => { delivered = true; }, () => socket);
+    socket.emit("open"); const transport = await connecting;
+    try {
+      socket.emit("message", JSON.stringify(wire), false);
+      assert.equal(await transport.closed, "MAGICCHAT_ENVELOPE_REJECTED");
+      assert.equal(delivered, false);
+    } finally { transport.close(); }
+  }
+});
+
 test("R005 loop receives correlated send confirmations without blocking the WebSocket receiver", async t => {
   const f = fixture(t); const { runR005LiveDriver } = await launcher();
   const consumer = new R005CqaConsumer(f.database, f.binding); t.after(() => consumer.close());
