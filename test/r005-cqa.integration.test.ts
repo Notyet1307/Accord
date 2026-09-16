@@ -593,7 +593,7 @@ test("pre-chat version 2 state is refused read-only without migration", () => {
   } finally { env.cleanup(); }
 });
 
-test("managed proof can arrive on a later Get without replacing the original Run or charging another Start", async () => {
+test("wrong managed deployment proof cannot commit across restart and normal waiting", async () => {
   const env = managedEnvironment(); let consumer = new R005CqaConsumer(env.path, env.binding, env.clock);
   const runtime = counting(env.binding);
   try {
@@ -605,12 +605,11 @@ test("managed proof can arrive on a later Get without replacing the original Run
     assert.equal(consumer.snapshot().operations[0]!.terminal, undefined);
     assert.equal(consumer.snapshot().responses.length, 0);
     consumer.close(); consumer = new R005CqaConsumer(env.path, env.binding, env.clock);
-    run.deploymentSha256 = env.binding.managed!.deploymentSha256;
-    await consumer.advance(runtime.port); assert.equal(runtime.counts().lookups, 1);
-    env.tick(5000);
-    assert.equal(await consumer.advance(runtime.port), "complete");
+    env.tick(30_000);
+    assert.equal(await consumer.advance(runtime.port), "unknown");
     assert.equal(consumer.snapshot().operations[0]!.runId, run.runId);
-    assert.equal(consumer.snapshot().responses.length, 1);
+    assert.equal(consumer.snapshot().operations[0]!.candidate, undefined);
+    assert.equal(consumer.snapshot().responses.length, 0);
     assert.deepEqual(runtime.counts(), { starts: 1, lookups: 2, cancels: 0 });
   } finally { consumer.close(); env.cleanup(); }
 });

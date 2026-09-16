@@ -43,7 +43,7 @@ function fixture() {
     outputCollection: "complete-separated-command/v1", observedAt: now - 1000, validUntil: now + 600_000 };
   const wire = JSON.stringify(deployment); writeFileSync(join(evidenceRoot, "deployment.json"), wire, { mode: 0o400 }); m.deploymentSha256 = cqaSha256(wire);
   const path = join(root, "r005.sqlite");
-  const calls: { method: string; request: Record<string, unknown> }[] = [];
+  const calls: { method: string; request: Record<string, unknown>; at: number }[] = [];
   const summaries = new Map<string, Record<string, unknown>>();
   const details = new Map<string, Record<string, unknown>>();
   let intercept: ((method: string, request: Record<string, unknown>) => Response | undefined) | undefined;
@@ -53,7 +53,7 @@ function fixture() {
     const headers = new Headers(init.headers); assert.equal(headers.get("Authorization"), `Bearer ${credential.value}`); assert.equal(headers.get("Connect-Protocol-Version"), "1");
     const method = url.slice((binding.runtime.endpoint + "/agentcompose.v2.RunService/").length);
     const request = JSON.parse(String(init.body)) as Record<string, unknown>;
-    calls.push({ method, request });
+    calls.push({ method, request, at: now });
     const overridden = intercept?.(method, request); if (overridden) return overridden;
     if (method === "StartAgentRun") {
       const run = request["run"] as Record<string, unknown>;
@@ -195,6 +195,85 @@ test("lost Start response discovers a summary, persists it, then spends a separa
   } finally { consumer.close(); f.cleanup(); }
 });
 
+test("known original Run collects terminal proof arriving after 26 seconds without exhausting its reads", async () => {
+  const f = fixture(); const consumer = new R005CqaConsumer(f.path, f.binding, f.clock); const adapter = f.adapter();
+  try {
+    const accepted = consumer.accept(f.input()), startedAt = f.clock();
+    await consumer.advance(adapter);
+    f.intercept((method, request) => {
+      if (method !== "GetRun" || f.calls.filter(call => call.method === "GetRun").length !== 1) return undefined;
+      const detail = f.details.get(String(request["runId"]))!;
+      return jsonResponse({ run: { ...detail, summary: { ...detail["summary"] as Record<string, unknown>, sandboxId: "" } } });
+    });
+    assert.equal(await consumer.advance(adapter), "unknown");
+    assert.equal(consumer.snapshot().operations[0]!.runId, undefined);
+    f.tick(); await consumer.advance(adapter);
+    assert.equal(consumer.snapshot().operations[0]!.runId, "run-query-1");
+    assert.equal(consumer.snapshot().operations[0]!.candidate, undefined);
+    assert.equal(consumer.snapshot().responses.length, 0);
+    for (let elapsed = 6000; elapsed < 120_000; elapsed += 1000) {
+      f.tick(1000);
+      if (elapsed === 26_000) f.complete(accepted.frozen, accepted.fingerprint);
+      await consumer.advance(adapter);
+      if (elapsed < 26_000) assert.equal(consumer.snapshot().responses.length, 0);
+      if (consumer.snapshot().operations[0]!.state === "complete") break;
+    }
+    const state = consumer.snapshot(), reads = f.calls.filter(call => call.method === "GetRun" || call.method === "ListRuns");
+    assert.equal(state.operations[0]!.state, "complete");
+    assert.equal(state.activeCase!.outcome, "candidate");
+    assert.deepEqual(state.responses.map(response => response.state), ["ready"]);
+    assert.equal(state.operations[0]!.candidate!.result.status, "DRAFT_READY");
+    assert.equal(state.operations[0]!.queries, reads.length);
+    assert.ok(reads.length <= 6);
+    assert.ok(reads.filter(call => call.at < startedAt + 26_000).length < 6);
+    assert.ok(reads.every((call, index) => index === 0 || call.at - reads[index - 1]!.at >= 5000));
+    assert.ok(f.clock() < accepted.frozen.deadline);
+    await consumer.advance(adapter);
+    assert.equal(consumer.snapshot().responses.length, 1);
+    assert.equal(f.calls.filter(call => call.method === "StartAgentRun").length, 1);
+  } finally { consumer.close(); f.cleanup(); }
+});
+
+test("known original Run preserves spent reads and deadline across restart while collecting later terminal proof", async () => {
+  const f = fixture(); let consumer = new R005CqaConsumer(f.path, f.binding, f.clock);
+  try {
+    const accepted = consumer.accept(f.input());
+    await consumer.advance(f.adapter()); await consumer.advance(f.adapter());
+    assert.equal(consumer.snapshot().operations[0]!.runId, "run-query-1");
+    for (let elapsed = 1000; elapsed < 120_000; elapsed += 1000) {
+      f.tick(1000);
+      if (elapsed === 45_000) {
+        const before = consumer.snapshot().operations[0]!;
+        consumer.close(); consumer = new R005CqaConsumer(f.path, f.binding, f.clock);
+        const restored = consumer.snapshot().operations[0]!;
+        assert.equal(restored.queries, before.queries);
+        assert.equal(restored.lastQueryAt, before.lastQueryAt);
+        assert.equal(restored.recoveryStartedAt, before.recoveryStartedAt);
+        assert.equal(restored.frozen.deadline, accepted.frozen.deadline);
+        assert.equal(restored.runId, "run-query-1");
+      }
+      if (elapsed === 100_000) f.complete(accepted.frozen, accepted.fingerprint);
+      await consumer.advance(f.adapter());
+      if (elapsed < 100_000) assert.equal(consumer.snapshot().responses.length, 0);
+      if (consumer.snapshot().operations[0]!.state === "complete") break;
+    }
+    const state = consumer.snapshot(), reads = f.calls.filter(call => call.method === "GetRun" || call.method === "ListRuns");
+    assert.equal(state.operations[0]!.state, "complete");
+    assert.deepEqual(state.responses.map(response => response.state), ["ready"]);
+    assert.equal(state.operations[0]!.candidate!.result.status, "DRAFT_READY");
+    assert.equal(state.operations[0]!.queries, reads.length);
+    assert.ok(reads.length <= 6);
+    assert.ok(reads.every((call, index) => index === 0 || call.at - reads[index - 1]!.at >= 5000));
+    assert.ok(f.clock() <= accepted.frozen.deadline - 5000);
+    consumer.close(); consumer = new R005CqaConsumer(f.path, f.binding, f.clock);
+    f.tick(accepted.frozen.deadline - f.clock());
+    await consumer.advance(f.adapter());
+    assert.equal(f.calls.length, reads.length + 1);
+    assert.equal(f.calls.filter(call => call.method === "StartAgentRun").length, 1);
+    assert.equal(consumer.snapshot().responses.length, 1);
+  } finally { consumer.close(); f.cleanup(); }
+});
+
 test("missing observation keeps authenticated original Run cancellable without filling expected evidence", async () => {
   const f = fixture(); const consumer = new R005CqaConsumer(f.path, f.binding, f.clock); const adapter = f.adapter();
   try {
@@ -215,8 +294,9 @@ test("late immutable observation can complete the original Run; wrong stream and
     f.complete(accepted.frozen, accepted.fingerprint, { engineInputSource: "/engine/another-operation" });
     assert.equal(await consumer.advance(adapter), "unknown"); assert.equal(consumer.snapshot().responses.length, 0);
     f.complete(accepted.frozen, accepted.fingerprint, { stderr: "warning mixed into output", outputTruncated: true });
-    f.tick(); assert.equal(await consumer.advance(adapter), "unknown"); assert.equal(consumer.snapshot().responses.length, 0);
-    f.complete(accepted.frozen, accepted.fingerprint); f.tick(); assert.equal(await consumer.advance(adapter), "complete");
+    f.tick(30_000); assert.equal(await consumer.advance(adapter), "unknown"); assert.equal(consumer.snapshot().responses.length, 0);
+    assert.equal(f.calls.filter(call => call.method === "GetRun").length, 2);
+    f.complete(accepted.frozen, accepted.fingerprint); f.tick(30_000); assert.equal(await consumer.advance(adapter), "complete");
     assert.equal(f.calls.filter(c => c.method === "StartAgentRun").length, 1);
   } finally { consumer.close(); f.cleanup(); }
 });
@@ -317,7 +397,7 @@ test("real Adapter and driver resume acknowledged pending input after a stale su
     await until(() => f.calls.some(call => call.method === "GetRun") && consumer.snapshot().chat!.sends.some(item => item.state === "sent"));
     await new Promise<void>(resolve => setImmediate(resolve));
     f.complete(old.frozen, old.fingerprint);
-    f.tick(); t.mock.timers.tick(5000);
+    f.tick(30_000); t.mock.timers.tick(30_000);
     await until(() => consumer.snapshot().operations[0]!.state === "expired");
     await new Promise<void>(resolve => setImmediate(resolve));
     f.tick(); t.mock.timers.tick(5000);

@@ -1,8 +1,8 @@
 # R005：固定合规查询结果的受管消费合同
 
-- Revision：`R005-CQA/r7`；Status：ACCEPTED（R005 私聊协议修复范围）；2026-09-16。
-- 授权来源：r4 Adapter／分层资格由 PR #80、r5 私聊装配由 PR #82、r6 完整 Run 挂载由 PR #84 交付。pilot-02 实际私聊发现合法多行 summary 和无 cursor 的 conversation.status 被拒绝后，用户选择「修复协议并继续测试」，授权本次额外修复交付及第 9 节的新有界运行包。原修订、授权和证据保持各自绑定，不制造查询或人工确认通过记录。
-- 本修订只修复 R005 选择的 MagicChat 输入协议处理，沿用已交付的字段收集、候选、精确 choice、完整 Run 挂载和 live launcher。主 Owner、CQA wire、SQLite schema/snapshot、输出资格、一次 Start 和恢复预算不变；不改 R003/R004 默认协议、CQA／平台代码，不增加替代运行通路。
+- Revision：`R005-CQA/r8`；Status：ACCEPTED（R005 已核验原 Run 的有界收集修复范围）；2026-09-16。
+- 授权来源：r4 Adapter／分层资格由 PR #80、r5 私聊装配由 PR #82、r6 完整 Run 挂载由 PR #84、r7 私聊协议由 PR #86 交付。pilot-05 实际 Search／模型成功，但第六次读取早于完整运行证明 942 毫秒；用户随后选择「修复并用最后额度验证」，授权本次合同／Accord 修复、验证、审查与正常合并及第 9 节最后一次有界实测。原修订、授权、Operation 和证据保持各自绑定，不制造查询或人工确认通过记录。
+- 本修订只区分未核验原 Run 的恢复与已核验原 Run 的正常结果等待，沿用既有输入协议、字段收集、候选、精确 choice、完整 Run 挂载和 live launcher。主 Owner、CQA wire、SQLite schema/snapshot、输出资格、一次 Start、最多六次读 RPC、未知提交的三十秒恢复和一百二十秒绝对截止不变；不改 R003/R004、CQA／平台代码，不增加替代运行通路，不重置或重新提交旧 Operation。
 - Objective：用户与固定合规资料研究员完成一次有来源的只读查询及补充，获得明确标记的候选答复；选择正式接受/导出时，由本人确认精确 Artifact。
 - Authoritative inputs：已接受的 [R005 Release](../product/releases/r005-compliance-query-conversational-pilot.md)、[ADR-0006](../adr/0006-r005-compliance-query-consumer-boundary.md)、[ADR-0005/r1](../adr/0005-r005-candidate-response-and-trial-trust.md)；[ADR-0002](../adr/0002-production-coordination-runtime-language.md) 的协调语言；[Delivery Gate](../agents/delivery-gate.md)；下述固定生产者源码及执行记录。R003/R004 的实现、库及原 ADR 边界不变。
 - Owner：Accord Coordinator。Producer：经认证的 MagicChat 输入、agent-compose 运行记录、CQA 候选内容、操作员冻结的合成来源快照、实际人工决定。Consumer：Case 与原私聊用户。
@@ -143,7 +143,7 @@ Adapter 消费操作员预置的私有证据文件：`evidenceRoot/deployment.js
 2. Start 前持久置“可能已提交”；崩溃后不能因未收到 Run ID 就再次 Start。Start 返回 Summary 时仅持久保存 `pendingRunId`，不是已核验原 Run，也不授权 StopRun；hint 与已有 hint／原 Run 冲突即拒绝。一个 Operation 不重新绑定第二个 Run。
 3. 已知原 Run 或 pendingRunId 时，下一次 advance 用 GetRun 核对完整身份。首次响应丢失则 ListRuns 按固定 project／agent／source 和 Operation／指纹 labels 精确过滤，limit=2；只有 total=1 且列表完整一致才保存 pendingRunId，下一次 advance 才 GetRun。lookup 显式携带原 frozen operation 以支持无内存状态恢复。零／多匹配、读错或不完整保持 UNKNOWN，无新 Start；此路径的真实部署资格仍待另行验证。
 4. 不照搬 CLI 重放：CLI 的 client key 含时间，CQA requestId 不防止新 Run/新 sandbox 的创建。上游数据库相同 run_id 复用也不提供完整 command/config fingerprint 冲突拒绝；责任仍在 Accord。
-5. 默认一次物理 Start，无自动 replacement Attempt。单次 RPC 至多 10 秒，外部工作绝对截止 120 秒，恢复窗口至多 30 秒；每次只使用共享剩余时间。只读预算按物理 RPC 持久计数，List 与 Get 各扣一次，共最多 6 次、相邻至少 5 秒，每次调用前扣次，崩溃不返还。第六次只有 Summary 时不能补第七次 Get。超限保持 UNKNOWN 并交还人工；次数不能延长截止。授权撤销后仅按保留的最小审计／恢复权限收集已发生状态，缺该权限则停止。
+5. 默认一次物理 Start，无自动 replacement Attempt。单次 RPC 至多 10 秒，外部工作绝对截止 120 秒；每次只使用共享剩余时间。只读预算按物理 RPC 持久计数，List 与 Get 各扣一次，共最多 6 次、相邻至少 5 秒，每次调用前扣次，崩溃不返还。未核验原 Run 身份时，恢复窗口仍为首次读取开始后至多 30 秒；`pendingRunId` 只是 hint，不能取得更长等待。经 GetRun 的 project／agent／source、Operation／完整指纹及 Run／Sandbox 关联核验、持久记录原 `runId` 后，允许在原 Operation 截止内等待同一 Run；将剩余读取次数分布到剩余执行时间，以原截止前 5 秒为末次读取的调度目标，仍不突破六次及相邻五秒。实际唤醒或 RPC 延迟不能延长绝对截止，剩余时间不足则缩短 RPC 等待或保持 UNKNOWN，不承诺临近截止才出现的结果必被收集。缺少完整挂载／输出证明仍为 UNKNOWN，身份核验只允许继续收集，不授权候选晋升。重启沿用已花费次数、最后读取时间和原截止，不重开窗口。第六次只有 Summary 时不能补第七次 Get。超限保持 UNKNOWN 并交还人工；次数不能延长截止。授权撤销后仅按保留的最小审计／恢复权限收集已发生状态，缺该权限则停止。本增量不放宽既有 StopRun 的三十秒取消／恢复边界。
 6. 平台 terminal success、exit code=0、无 cleanup error 只是外壳条件；候选还须满足本节独立运行证明、CQA 合同及 fresh 提交条件，不能将 command 元数据当成 CQA result。
 7. 取消意图先落盘并阻止后续 Start；仅对 GetRun 完整核验的原 Run 发送一次有界 StopRun，Summary hint 不足以授权取消。未知 ID 时仅在既有查询预算内定位。StopRun 不占只读六次，但受取消／恢复权限和截止限制，不重试或重建 sandbox。即使候选已判迟到也继续处理已持久取消意图；stop requested、取消确认、业务 completion 分开，均不证明 Search／模型已停止。
 8. deadline 到期、新输入、授权撤销或取消与完成竞态，都不能让旧结果推进 Case。平台记录/回执因 GC 或重建丢失时保持 UNKNOWN；绝不删除本地记录重试。冻结期间禁止对该专用项目热改 Binding/权限或清理未解决 Run。
@@ -187,6 +187,7 @@ X1 已证明 stop/resume 更换容器也可能丢失 `/tmp` 回执，且平台 c
 | C17 | 控制凭据缺失/错绑；guest token 请求管理动作；控制端点/网络漂移 | 无业务提交或明确拒绝；不退回 CLI/Direct、不开放宿主端口碰运气、不把客户端白名单当服务端权限证明 |
 | C18 | reported/partial/unknown/not_called、显式零、大整数、重复结果、失败缺失用量 | 用量不舍入、不补零、不重复累计；无效可选用量不丢弃合法内容；provider/model 明确错绑拒绝；未知费用不显示为零 |
 | C19 | 同 agentVersion 的新二进制/配置/资料、开发树漂移、旧 X1 镜像配新 schema | 保持原 Binding 或拒绝新提交；不凭版本字符串、main HEAD 或结果自报替换生产者资格；后到错绑结果不覆盖原合法候选 |
+| C20 | 已核验原 Run 的完整证明在约 26 秒或更晚才可用；等待中重启；身份未核验或读取已耗尽 | 原 120 秒截止内以剩余六次总预算取得并提交唯一 fresh 候选，不在约 25 秒提前花完正常等待预算；重启不返还次数或重开截止；hint／错绑不取得正常等待，未知恢复仍受 30 秒限制；第七次读取、第二次 Start、无证明／过期／撤权／取消结果晋升均为零 |
 
 后续真实验收还需证明 agent-compose/CQA/OctoBus/消息端实际身份、权限旁路拒绝、首次响应丢失、取消/持久卷/日志与发送确认窗口。CQA X1 的 extractive 原生查询通过只解除它明确覆盖的前置，不自动解除 R005 的模型、MagicChat、完整恢复或 operator qualification 门。
 
@@ -340,6 +341,16 @@ G1／G2 仅继承[固定验收摘要][cqa-s2-accepted]覆盖的组合和边界�
 只复用既定 R005 测试账号／App／私聊；pilot-01、pilot-02 的资源、输入、数据库和证据保留。模型与第 9 节原授权的凭据范围、控制风险和目录例外不变；不改 CQA／平台或旧账号，不自动重试／替代查询，不代用户执行 Human Acceptance。新窗口不是延长旧窗口；新运行的身份、冻结配置、实际输入／控制／输出事实仍须重新验证。未执行的查询、正式确认和故障场景明确报告，不能由软件通过推定完成。
 
 本修订不改变事实所有权或新增通用平台决定，沿用 ADR-0006；改用另一控制通路、放宽 source／permission 或补丁能力时，须回到相应 ADR／Release 决策者。本地实施授权不形成新的业务运行权限。
+
+### 原 Run 收集修复与最后额度
+
+pilot-05 的[实际回执](https://github.com/Notyet1307/Accord/pull/86#issuecomment-5693828912)记录一次成功的 Search 和一次成功的模型调用，CQA 返回 `DRAFT_READY`；但原六次读取在完整独立证明可用前 942 毫秒耗尽，Accord 未提交候选。该事实不推翻原 r7 软件门禁，也不等于私聊闭环通过。
+
+用户选择「修复并用最后额度验证」的[实际授权记录](/Users/yet/.local/share/accord-r005-live/pilot-05/evidence/collection-wait-repair-authorization.json)允许一个额外的 Spec／Accord 收集修复 Issue/PR，仅覆盖本修订的有界等待策略和相应回归。精确 head 的独立 Standards／Spec 审查、CI、operator 隔离资格及正常合并后，才可冻结一个全新隔离运行包；仅复用既定 R005 测试账号／App／私聊和已选模型凭据。
+
+原窗口截止固定为 **2026-09-16T08:36:52.421Z（16:36:52.421 +08:00）**，停止保留上限仍为其后两分钟；不续期。pilot-04 和 pilot-05 各已使用一次查询，原总三次预算只剩 **一次**；本次额外授权操作员最多执行这一条合成查询及一次模型调用。未在原窗口内完成的软件门禁或运行准入不能由延长窗口补偿；届时只交付已经完成的软件和实际记录，新的运行另取授权。
+
+pilot-01 至 pilot-05 的 Operation、数据库、输入、回执和证据全部保留，不重置次数、不修改截止、不注入迟到结果、不重跑旧查询。正式 Artifact 的 Human Acceptance 仍由用户本人操作。CQA／平台、R003/R004、schema/snapshot、控制通路和 ADR-0006 的事实所有权决定不变；无自动重连、fallback 或新增常驻授权。
 
 [cqa-types]: https://github.com/Notyet1307/compliance-query-agent/blob/499af50675ab4355158eaf943fcb42c56b8c09fe/internal/agent/types.go
 [cqa-engine]: https://github.com/Notyet1307/compliance-query-agent/blob/499af50675ab4355158eaf943fcb42c56b8c09fe/internal/agent/engine.go
